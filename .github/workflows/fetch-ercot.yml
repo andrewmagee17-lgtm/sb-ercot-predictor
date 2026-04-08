@@ -17,10 +17,11 @@ jobs:
         with:
           ref: gh-pages
 
-      - name: Fetch ERCOT ESR data + 10-day history
+      - name: Fetch ERCOT ESR data + build 10-day SoC model
         run: |
           python3 - << 'PYEOF'
-          import urllib.request, json, datetime, time
+          import urllib.request, json, datetime
+          from collections import defaultdict
 
           BASE = 'https://www.ercot.com/api/1/services/read/dashboards/energy-storage-resources.json'
           HEADERS = {
@@ -29,38 +30,38 @@ jobs:
             'Referer': 'https://www.ercot.com/gridmktinfo/dashboards/energystorageresources'
           }
 
-          def fetch_json(url):
-            req = urllib.request.Request(url, headers=HEADERS)
-            with urllib.request.urlopen(req, timeout=15) as r:
-              return json.loads(r.read())
-
           now_utc = datetime.datetime.now(datetime.timezone.utc)
+          cdt     = datetime.timezone(datetime.timedelta(hours=-5))
+          now_cdt = now_utc.astimezone(cdt)
 
-          # ── Current snapshot ──────────────────────────────────
+          # ── Fetch current snapshot ─────────────────────────────
           try:
-            raw = fetch_json(BASE)
-            current = raw.get('currentDay', {}).get('data', []) or raw.get('currentDay', [])
+            req = urllib.request.Request(BASE, headers=HEADERS)
+            with urllib.request.urlopen(req, timeout=15) as r:
+              raw = json.loads(r.read())
+
+            current = raw.get('currentDay',  {}).get('data', []) or raw.get('currentDay',  [])
             prev    = raw.get('previousDay', {}).get('data', []) or raw.get('previousDay', [])
             all_pts = prev + current
 
             latest = current[-1] if current else (prev[-1] if prev else {})
+            dis  = round(abs(float(latest.get('totalDischarging', 0))))
+            chg  = round(abs(float(latest.get('totalCharging',    0))))
+            net  = round(float(latest.get('netOutput', 0)))
             snap = {
-              'discharge_mw': round(abs(float(latest.get('totalDischarging', 0)))),
-              'charge_mw':    round(abs(float(latest.get('totalCharging', 0)))),
-              'net_mw':       round(float(latest.get('netOutput', 0))),
+              'discharge_mw': dis, 'charge_mw': chg, 'net_mw': net,
               'timestamp':    latest.get('timestamp', ''),
               'status':       'live',
               'source':       'ERCOT ESR Dashboard (live)',
               'fetched_utc':  now_utc.isoformat(),
             }
           except Exception as e:
-            snap = {'status': 'error', 'error': str(e),
-                    'fetched_utc': now_utc.isoformat(), 'source': 'ERCOT ESR'}
+            dis, chg, net = 0, 0, 0
             all_pts = []
+            snap = {'status':'error','error':str(e),
+                    'fetched_utc':now_utc.isoformat(),'source':'ERCOT ESR'}
 
-          # ── Build 10-day hourly profile ────────────────────────
-          # We have up to 2 days from the live endpoint (previousDay + currentDay).
-          # For the other 8 days we load the existing history file and append.
+          # ── Load + update history ──────────────────────────────
           HISTORY_FILE = 'history.json'
           try:
             with open(HISTORY_FILE) as f:
@@ -68,84 +69,126 @@ jobs:
           except Exception:
             history = []
 
-          # Parse the two days we just got
-          new_pts = []
+          existing_ts = {p['ts'] for p in history}
           for pt in all_pts:
             try:
-              ts  = pt.get('timestamp', '')
-              dis = abs(float(pt.get('totalDischarging', 0)))
-              chg = abs(float(pt.get('totalCharging', 0)))
-              new_pts.append({'ts': ts, 'dis': round(dis), 'chg': round(chg),
-                              'net': round(dis - chg)})
+              ts   = pt.get('timestamp', '')
+              d    = abs(float(pt.get('totalDischarging', 0)))
+              c    = abs(float(pt.get('totalCharging',    0)))
+              n    = float(pt.get('netOutput', 0))
+              if ts and ts not in existing_ts:
+                history.append({'ts':ts,'dis':round(d),'chg':round(c),'net':round(n)})
+                existing_ts.add(ts)
             except Exception:
               pass
 
-          # Merge: deduplicate by timestamp, keep newest 10 days (~2880 five-min pts)
-          existing_ts = {p['ts'] for p in history}
-          for pt in new_pts:
-            if pt['ts'] not in existing_ts:
-              history.append(pt)
-              existing_ts.add(pt['ts'])
-
-          # Trim to last 10 days
           cutoff = now_utc - datetime.timedelta(days=10)
           history = [p for p in history if p['ts'] >= cutoff.isoformat()[:16]]
           history.sort(key=lambda p: p['ts'])
 
-          # ── Build hourly SoC profile from history ─────────────
-          # For each hour-of-day (0-23), compute average net MW.
-          # Cumulative sum of net gives relative SoC trajectory.
-          # Normalize so trough = 0%, peak = 100%.
-          from collections import defaultdict
+          # ── Build hourly SoC profile ───────────────────────────
+          # Key physics:
+          #   net = discharge - charge
+          #   net > 0  →  fleet is net discharging  →  SoC DECREASING
+          #   net < 0  →  fleet is net charging      →  SoC INCREASING
+          #   SoC delta = -net  (negate!)
+          #
+          # We integrate hourly average (-net) starting from midnight
+          # Then anchor the curve so the minimum = ~10% (operational floor)
+          # and scale the range to realistic operating band (10% - 95%)
+
           hour_net = defaultdict(list)
           for pt in history:
             try:
-              hr = int(pt['ts'][11:13])   # extract hour from timestamp string
+              # Parse hour from timestamp - handle various formats
+              ts_str = pt['ts']
+              # Try to extract CDT hour from UTC timestamp
+              ts_utc = datetime.datetime.fromisoformat(ts_str.replace('Z',''))
+              if ts_utc.tzinfo is None:
+                # Assume it's already CDT (ERCOT reports in local time)
+                hr = ts_utc.hour
+              else:
+                hr = ts_utc.astimezone(cdt).hour
               hour_net[hr].append(pt['net'])
             except Exception:
               pass
 
-          hourly_avg = {}
+          hourly_avg_net = {}
           for hr in range(24):
             vals = hour_net.get(hr, [])
-            hourly_avg[hr] = round(sum(vals)/len(vals)) if vals else 0
+            hourly_avg_net[hr] = round(sum(vals)/len(vals)) if vals else 0
 
-          # Integrate net to get relative SoC curve
-          soc_raw = []
+          # Integrate: SoC change = -net (charging increases SoC)
+          # Start at a spring overnight baseline of ~45%
+          OVERNIGHT_BASELINE = 45  # % SoC at midnight (spring Texas)
+          soc_curve_raw = []
           cumulative = 0
           for hr in range(24):
-            cumulative += hourly_avg[hr]
-            soc_raw.append(cumulative)
+            delta = -hourly_avg_net[hr]  # negate: charging raises SoC
+            cumulative += delta
+            soc_curve_raw.append(cumulative)
 
-          soc_min, soc_max = min(soc_raw), max(soc_raw)
-          soc_range = soc_max - soc_min if soc_max != soc_min else 1
+          # Normalize so min=10%, max=92% (realistic ERCOT operating range)
+          raw_min = min(soc_curve_raw)
+          raw_max = max(soc_curve_raw)
+          raw_range = raw_max - raw_min if raw_max != raw_min else 1
 
-          # Normalize 0-100
+          SOC_MIN = 10  # operational floor
+          SOC_MAX = 92  # practical peak (not fully charged due to ancillary reserves)
+
           hourly_soc = {}
           for hr in range(24):
-            hourly_soc[hr] = round((soc_raw[hr] - soc_min) / soc_range * 100)
+            normalized = (soc_curve_raw[hr] - raw_min) / raw_range
+            hourly_soc[hr] = round(SOC_MIN + normalized * (SOC_MAX - SOC_MIN))
 
-          # Current hour estimated SoC
-          cdt_offset = datetime.timezone(datetime.timedelta(hours=-5))
-          now_cdt = now_utc.astimezone(cdt_offset)
+          # If we have no history yet, fall back to spring Texas prior
+          if len(history) < 50:
+            spring_prior = {
+              0:48, 1:46, 2:44, 3:42, 4:40, 5:40,
+              6:45, 7:52, 8:60, 9:68, 10:76, 11:83,
+              12:88, 13:91, 14:92, 15:90, 16:82,
+              17:65, 18:45, 19:30, 20:22, 21:18,
+              22:20, 23:26
+            }
+            hourly_soc = spring_prior
+
+          # Current hour estimated SoC from history model
           current_hour = now_cdt.hour
-          estimated_soc = hourly_soc.get(current_hour, 50)
+          history_soc  = hourly_soc.get(current_hour, 50)
 
-          snap['estimated_soc']    = estimated_soc
-          snap['hourly_soc']       = hourly_soc
-          snap['hourly_avg_net']   = hourly_avg
-          snap['history_pts']      = len(history)
-          snap['history_days']     = round(len(history) * 5 / 1440, 1)
+          # ── Blend: history (80%) + live rate signal (20%) ──────
+          # The live rate signal: if currently charging hard, SoC is
+          # trending UP from where the history says it should be.
+          # We apply a small adjustment based on net MW vs typical.
+          typical_net = hourly_avg_net.get(current_hour, 0)
+          actual_net  = net
+          deviation   = actual_net - typical_net   # positive = more discharge than usual
+          # Each 1000 MW deviation ≈ 2-3% SoC adjustment (for 15,700 MW fleet)
+          rate_adjustment = -round(deviation / 1000 * 2.5)
+          rate_adjustment = max(-15, min(15, rate_adjustment))  # cap ±15%
 
-          # ── Write files ────────────────────────────────────────
+          estimated_soc = max(5, min(98,
+            round(history_soc * 0.80 + (history_soc + rate_adjustment) * 0.20)
+          ))
+
+          snap['estimated_soc']     = estimated_soc
+          snap['history_soc']       = history_soc
+          snap['hourly_soc']        = hourly_soc
+          snap['hourly_avg_net']    = hourly_avg_net
+          snap['history_pts']       = len(history)
+          snap['history_days']      = round(len(history) * 5 / 1440, 1)
+          snap['current_hour_cdt']  = current_hour
+          snap['rate_adjustment']   = rate_adjustment
+
           with open('data.json', 'w') as f:
             json.dump(snap, f, indent=2)
-
           with open(HISTORY_FILE, 'w') as f:
             json.dump(history, f)
 
-          print(f"Written data.json | SoC hour {current_hour}: {estimated_soc}% | "
-                f"History: {len(history)} pts ({snap['history_days']} days)")
+          print(f"Hour {current_hour} CDT | History SoC: {history_soc}% | "
+                f"Rate adj: {rate_adjustment:+}% | Final: {estimated_soc}% | "
+                f"Net: {net} MW (typical: {typical_net} MW) | "
+                f"History: {len(history)} pts ({snap['history_days']}d)")
           PYEOF
 
       - name: Commit and push
@@ -153,5 +196,5 @@ jobs:
           git config user.name "ERCOT Data Bot"
           git config user.email "action@github.com"
           git add data.json history.json
-          git diff --staged --quiet || git commit -m "ERCOT ESR update $(date -u +'%H:%M UTC')"
+          git diff --staged --quiet || git commit -m "ERCOT ESR $(date -u +'%H:%M UTC')"
           git push

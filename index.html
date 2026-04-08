@@ -316,10 +316,26 @@ async function fetchLive() {
 }
 
 function inferSocFromSnapshot(dis, chg) {
-  const N = 15700, dr = dis/N, cr = chg/N;
-  if (chg > dis*1.5) return Math.min(50, Math.round(20+cr*70));
-  if (dis > chg*2)   return Math.min(85, Math.round(50+dr*60));
-  return 50;
+  // Use time-of-day prior (spring Texas) as primary signal
+  // The charge/discharge RATE tells us direction, not current level
+  // Heavy charging at midday = SoC rising toward peak (NOT low SoC)
+  const springPrior = {
+    0:48,1:46,2:44,3:42,4:40,5:40,
+    6:45,7:52,8:60,9:68,10:76,11:83,
+    12:88,13:91,14:92,15:90,16:82,
+    17:65,18:45,19:30,20:22,21:18,
+    22:20,23:26
+  };
+  const hr = new Date().toLocaleString('en-US',{timeZone:'America/Chicago',hour:'numeric',hour12:false})*1;
+  const prior = springPrior[hr] ?? 50;
+
+  // Apply rate-of-change adjustment:
+  // net = dis - chg. Negative net = charging = SoC rising above prior
+  const net = dis - chg;
+  const FLEET = 15700;
+  // Each 1000 MW net deviation ≈ ±2.5% SoC adjustment
+  const adj = -Math.round((net / 1000) * 2.5);
+  return Math.max(5, Math.min(98, prior + Math.max(-15, Math.min(15, adj))));
 }
 
 function updateStrip() {
