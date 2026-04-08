@@ -1,0 +1,77 @@
+name: Fetch ERCOT ESR Data
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout gh-pages
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+
+      - name: Fetch ERCOT ESR data
+        run: |
+          python3 - << 'PYEOF'
+          import urllib.request, json, datetime
+
+          url = 'https://www.ercot.com/api/1/services/read/dashboards/energy-storage-resources.json'
+          headers = {
+            'Accept': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (compatible; ERCOT-Data-Fetcher/1.0)',
+            'Referer': 'https://www.ercot.com/gridmktinfo/dashboards/energystorageresources'
+          }
+
+          try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=15) as resp:
+              raw = json.loads(resp.read())
+
+            current = raw.get('currentDay', {}).get('data', [])
+            if not current:
+              current = raw.get('currentDay', [])
+
+            if current:
+              latest = current[-1]
+              data = {
+                'discharge_mw': round(abs(float(latest.get('totalDischarging', 0)))),
+                'charge_mw': round(abs(float(latest.get('totalCharging', 0)))),
+                'net_mw': round(float(latest.get('netOutput', 0))),
+                'timestamp': latest.get('timestamp', ''),
+                'fetched_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                'source': 'ERCOT ESR Dashboard (live)',
+                'status': 'live'
+              }
+            else:
+              raise ValueError('No data in response')
+
+          except Exception as e:
+            data = {
+              'discharge_mw': 0,
+              'charge_mw': 0,
+              'net_mw': 0,
+              'status': 'error',
+              'error': str(e),
+              'fetched_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              'source': 'ERCOT ESR (fetch failed)'
+            }
+
+          with open('data.json', 'w') as f:
+            json.dump(data, f, indent=2)
+          print('Written:', json.dumps(data))
+          PYEOF
+
+      - name: Commit and push
+        run: |
+          git config user.name "ERCOT Data Bot"
+          git config user.email "action@github.com"
+          git add data.json
+          git diff --staged --quiet || git commit -m "ERCOT ESR update $(date -u +'%H:%M UTC')"
+          git push
