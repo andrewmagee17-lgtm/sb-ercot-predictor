@@ -322,7 +322,6 @@ async function fetchLive() {
     document.getElementById('soc-box').innerHTML =
       `<span style="color:var(--accent2)">Could not load data.json: ${e.message}<br>Make sure the GitHub Action has run at least once.</span>`;
   }
-  setTimeout(fetchLive, 5*60*1000);
 }
 
 function inferSocFromSnapshot(dis, chg) {
@@ -638,7 +637,15 @@ function recalc() {
   `;
 }
 
-window.addEventListener('load', ()=>{ initCharts(); recalc(); fetchLive(); });
+window.addEventListener('load', ()=>{
+  initCharts();
+  recalc();
+  fetchLive();
+  // Guaranteed refresh every 5 minutes regardless of fetch success/failure
+  setInterval(fetchLive, 5 * 60 * 1000);
+  // Also refresh every minute just to update the clock-based SoC estimate
+  setInterval(()=>{ if(LD.ok) recalc(); }, 60 * 1000);
+});
 window.addEventListener('resize', ()=>{ initCharts(); recalc(); drawSocCurve(); });
 </script>
 </body>
