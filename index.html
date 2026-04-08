@@ -2,11 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta http-equiv="Pragma" content="no-cache">
-<meta http-equiv="Expires" content="0">
-<!-- v2.1 live-proxy build -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <title>SB Offer Curve Intel | ERCOT BESS Predictor</title>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -31,7 +28,8 @@ body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(
 .ls-label{font-size:8px;letter-spacing:.2em;text-transform:uppercase;color:var(--text3);margin-bottom:3px;}
 .ls-val{font-size:17px;font-weight:600;}
 .ls-sub{font-size:8px;color:var(--text3);margin-top:1px;}
-.fetch-status{font-size:9px;color:var(--text3);margin-top:4px;height:12px;}
+.btn-refresh{background:transparent;border:1px solid var(--accent);color:var(--accent);font-family:'IBM Plex Mono',monospace;font-size:8px;letter-spacing:.15em;text-transform:uppercase;padding:3px 8px;cursor:pointer;margin-top:4px;}
+.btn-refresh:hover{background:rgba(0,212,255,.1);}
 .metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:12px;}
 .metric{background:var(--panel);border:1px solid var(--border);padding:10px 12px;}
 .m-label{font-size:8px;letter-spacing:.2em;text-transform:uppercase;color:var(--text3);margin-bottom:4px;}
@@ -52,8 +50,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:12px;heigh
 select{background:var(--bg3);border:1px solid var(--border2);color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:11px;padding:6px 8px;width:100%;outline:none;cursor:pointer;appearance:none;}
 .btn-run{background:transparent;border:1px solid var(--accent3);color:var(--accent3);font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.2em;text-transform:uppercase;padding:10px;cursor:pointer;width:100%;margin-top:10px;transition:all .2s;}
 .btn-run:hover{background:rgba(57,255,20,.08);}
-.btn-refresh{background:transparent;border:1px solid var(--accent);color:var(--accent);font-family:'IBM Plex Mono',monospace;font-size:8px;letter-spacing:.15em;text-transform:uppercase;padding:3px 8px;cursor:pointer;margin-top:4px;transition:all .2s;}
-.btn-refresh:hover{background:rgba(0,212,255,.1);}
 canvas{width:100%;display:block;}
 .cw{position:relative;background:var(--bg2);border:1px solid var(--border);padding:12px;}
 .clabel{font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--text3);margin-bottom:8px;}
@@ -111,11 +107,10 @@ canvas{width:100%;display:block;}
   <div><div class="ls-label">Est. Fleet SoC</div><div class="ls-val c-warn" id="ld-s">—</div><div class="ls-sub">inferred from dispatch</div></div>
   <div><div class="ls-label">Fleet Mode</div><div class="ls-val" id="ld-m" style="font-size:13px;">—</div><div class="ls-sub">current behavior</div></div>
   <div>
-    <div class="ls-label">Data Source</div>
+    <div class="ls-label">Last Updated</div>
     <div class="ls-val" id="ld-t" style="font-size:10px;">—</div>
-    <div class="ls-sub" id="ld-src">ERCOT ESR</div>
+    <div class="ls-sub" id="ld-src" style="font-style:italic;">GitHub Action → data.json</div>
     <button class="btn-refresh" onclick="fetchLive()">↻ REFRESH</button>
-    <div class="fetch-status" id="fetch-status"></div>
   </div>
 </div>
 
@@ -130,15 +125,7 @@ canvas{width:100%;display:block;}
 <div class="main-grid">
   <div class="panel">
     <div class="ph"><span class="pt">Scenario Inputs</span><span class="ptag">CONFIGURABLE</span></div>
-    <div class="cg">
-      <label class="cl">Ramp Trigger</label>
-      <select id="ramp-type" onchange="recalc()">
-        <option value="solar">Solar Sunset Ramp (typical)</option>
-        <option value="wind">Wind Drop Event</option>
-        <option value="both">Combined Solar + Wind</option>
-        <option value="load">Load Spike (demand-driven)</option>
-      </select>
-    </div>
+    <div class="cg"><label class="cl">Ramp Trigger</label><select id="ramp-type" onchange="recalc()"><option value="solar">Solar Sunset Ramp (typical)</option><option value="wind">Wind Drop Event</option><option value="both">Combined Solar + Wind</option><option value="load">Load Spike (demand-driven)</option></select></div>
     <div class="cg">
       <label class="cl">Net Load Ramp Rate (GW/hr)</label>
       <div class="cv" id="v-ramp">28 <span class="cu">GW/hr</span></div>
@@ -163,14 +150,7 @@ canvas{width:100%;display:block;}
       <input type="range" id="hub-price" min="20" max="500" value="85" oninput="recalc()">
       <div style="display:flex;justify-content:space-between;font-size:8px;color:var(--text3);"><span>$20</span><span>$500</span></div>
     </div>
-    <div class="cg">
-      <label class="cl">Ancillary Market Saturation</label>
-      <select id="anc-sat" onchange="recalc()">
-        <option value="low">Low — ancillaries still profitable</option>
-        <option value="med" selected>Medium — mixed stack</option>
-        <option value="high">High — energy arbitrage dominant</option>
-      </select>
-    </div>
+    <div class="cg"><label class="cl">Ancillary Market Saturation</label><select id="anc-sat" onchange="recalc()"><option value="low">Low — ancillaries still profitable</option><option value="med" selected>Medium — mixed stack</option><option value="high">High — energy arbitrage dominant</option></select></div>
     <button class="btn-run" onclick="recalc()">▶ RUN PREDICTION</button>
   </div>
 
@@ -199,7 +179,7 @@ canvas{width:100%;display:block;}
   <div>
     <div class="panel" style="margin-bottom:10px;">
       <div class="ph"><span class="pt">SB Fleet SoC Model</span><span class="ptag" id="soc-tag">ESTIMATED</span></div>
-      <div class="soc-inf" id="soc-box">Fetching live ERCOT fleet data...</div>
+      <div class="soc-inf" id="soc-box">Loading live fleet data...</div>
       <div class="sb-wrap"><div class="sb-lbl"><span>DA Committed</span><span id="s-da">—</span></div><div class="sb-track"><div class="sb-fill" id="b-da" style="background:var(--sb);width:0;"></div></div></div>
       <div class="sb-wrap"><div class="sb-lbl"><span>RT Held Back</span><span id="s-rt">—</span></div><div class="sb-track"><div class="sb-fill" id="b-rt" style="background:rgba(139,92,246,.4);width:0;"></div></div></div>
       <div class="sb-wrap"><div class="sb-lbl"><span>Ancillary Reserve</span><span id="s-anc">—</span></div><div class="sb-track"><div class="sb-fill" id="b-anc" style="background:var(--warn);width:0;"></div></div></div>
@@ -221,7 +201,7 @@ canvas{width:100%;display:block;}
     <div class="alert" id="alert-box"></div>
     <div id="sb-behavior"></div>
     <div class="sb-box"><div class="sbt">Predicted Offer Curve Detail</div><div id="sb-offer-detail"></div></div>
-    <div class="footnote">* Predictions from Ascend Analytics public newsletters + ERCOT SCED patterns. SoC inferred from live ERCOT ESR telemetry. SB nameplate est. 2,100–2,800 MW ERCOT. Not financial advice.</div>
+    <div class="footnote">* Live data via GitHub Action fetching ERCOT ESR every 5 min — same-origin, zero CORS issues. SB nameplate est. 2,100–2,800 MW ERCOT. Not financial advice.</div>
   </div>
   <div class="panel">
     <div class="ph"><span class="pt">Your Counter-Positioning (420MW / 510MWh)</span><span class="tag-you">YOUR ASSET</span></div>
@@ -237,168 +217,98 @@ canvas{width:100%;display:block;}
 </div>
 
 <script>
-// ── State ──────────────────────────────────────────────────────
-const LD={discharge:null,charge:null,net:null,ts:null,soc:null,mode:null,ok:false,source:''};
+const LD={discharge:null,charge:null,net:null,ts:null,soc:null,mode:null,ok:false};
 let socAutoMode=true;
 
-// ── Clock ───────────────────────────────────────────────────────
 setInterval(()=>{
   const o={timeZone:'America/Chicago',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false};
   document.getElementById('clock').textContent=new Date().toLocaleTimeString('en-US',o)+' CDT';
 },1000);
 
-// ── Live Data Fetch — Multi-proxy with fallback ─────────────────
-const ERCOT_ESR = 'https://www.ercot.com/api/1/services/read/dashboards/energy-storage-resources.json';
-
-// Multiple CORS proxy options — tries each in order until one works
-const PROXIES = [
-  url => `https://corsproxy.io/?${encodeURIComponent(url)}`,
-  url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-  url => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
-  url => url  // direct attempt last (works if ERCOT ever adds CORS headers)
-];
-
-async function fetchLive() {
+// Fetch from same-origin data.json — written every 5 min by GitHub Action
+// Zero CORS issues: same github.io domain
+async function fetchLive(){
   setBadge('load','FETCHING LIVE DATA');
-  setStatus('Connecting to ERCOT...');
+  try{
+    const resp = await fetch('./data.json?t='+Date.now(), {cache:'no-store'});
+    if(!resp.ok) throw new Error('HTTP '+resp.status);
+    const d = await resp.json();
+    if(d.status==='error') throw new Error(d.error);
 
-  for(let i=0;i<PROXIES.length;i++){
-    const proxyUrl = PROXIES[i](ERCOT_ESR);
-    const proxyName = i===0?'corsproxy.io':i===1?'allorigins.win':i===2?'codetabs.com':'direct';
-    setStatus(`Trying ${proxyName}...`);
-    try{
-      const resp = await fetch(proxyUrl,{
-        headers:{Accept:'application/json'},
-        signal:AbortSignal.timeout(8000)
-      });
-      if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data = await resp.json();
-
-      // Handle allorigins wrapping
-      const payload = data.contents ? JSON.parse(data.contents) : data;
-
-      // Parse ERCOT ESR structure: { currentDay: { data: [...] } }
-      const arr = payload.currentDay?.data || payload.currentDay || payload.data || [];
-      if(!arr.length) throw new Error('Empty data');
-
-      const latest = arr[arr.length-1];
-      const dis = Math.round(Math.abs(+latest.totalDischarging || 0));
-      const chg = Math.round(Math.abs(+latest.totalCharging || 0));
-      const net = Math.round(+latest.netOutput || (dis-chg));
-      const ts  = latest.timestamp || new Date().toISOString();
-
-      setLD(dis,chg,net,ts,`ERCOT via ${proxyName}`);
-      setBadge('live','LIVE ERCOT DATA');
-      setStatus('');
-
-      // Auto-refresh every 5 min
-      setTimeout(fetchLive, 5*60*1000);
-      return;
-
-    }catch(e){
-      console.warn(`Proxy ${proxyName} failed:`,e.message);
-      setStatus(`${proxyName} failed, trying next...`);
-    }
+    setLD(
+      Math.round(Math.abs(d.discharge_mw||0)),
+      Math.round(Math.abs(d.charge_mw||0)),
+      Math.round(d.net_mw||0),
+      d.fetched_utc||d.timestamp,
+      d.source||'ERCOT ESR'
+    );
+    setBadge('live', d.status==='seed' ? 'SEED DATA' : 'LIVE ERCOT DATA');
+  }catch(e){
+    console.error('data.json fetch failed:',e);
+    setBadge('stale','FETCH ERROR');
+    document.getElementById('soc-box').innerHTML=`<span style="color:var(--accent2)">Could not load data.json: ${e.message}</span>`;
   }
-
-  // All proxies failed — use time-of-day typical
-  useFallback();
+  setTimeout(fetchLive, 5*60*1000);
 }
-
-function useFallback(){
-  const cdt=new Date(new Date().toLocaleString('en-US',{timeZone:'America/Chicago'}));
-  const h=cdt.getHours()+cdt.getMinutes()/60;
-  let dis,chg;
-  // Typical April Texas spring pattern
-  if(h<6)      {dis=350+rnd(200); chg=200+rnd(150);}
-  else if(h<10){dis=1100+rnd(500);chg=150+rnd(100);}
-  else if(h<13){dis=250+rnd(200); chg=3800+rnd(1200);}
-  else if(h<16){dis=600+rnd(400); chg=1800+rnd(600);}
-  else if(h<20){dis=4800+rnd(1600);chg=150+rnd(100);}
-  else         {dis=1200+rnd(400);chg=350+rnd(150);}
-  setLD(Math.round(dis),Math.round(chg),Math.round(dis-chg),new Date().toISOString(),'Typical (proxy unavailable)');
-  setBadge('stale','TYPICAL VALUES');
-  setStatus('All proxies failed — showing time-of-day typical');
-  setTimeout(fetchLive, 2*60*1000); // retry in 2 min
-}
-const rnd=n=>Math.random()*n;
 
 function setLD(dis,chg,net,ts,source){
-  LD.discharge=dis;LD.charge=chg;LD.net=net;LD.ts=ts;LD.ok=true;LD.source=source;
-  const NAMEPLATE=15700,dr=dis/NAMEPLATE,cr=chg/NAMEPLATE;
+  LD.discharge=dis;LD.charge=chg;LD.net=net;LD.ts=ts;LD.ok=true;
+  const N=15700,dr=dis/N,cr=chg/N;
   if(chg>dis*1.5){LD.soc=Math.min(50,Math.round(20+cr*70));LD.mode='CHARGING';}
   else if(dis>chg*2){LD.soc=Math.min(85,Math.round(50+dr*60));LD.mode='DISCHARGING';}
-  else{LD.soc=45+Math.round(rnd(15));LD.mode='STANDBY/AS';}
-  updateStrip();
+  else{LD.soc=45+Math.round(Math.random()*15);LD.mode='STANDBY/AS';}
+
+  const f=n=>n!=null?n.toLocaleString()+' MW':'—';
+  document.getElementById('ld-d').textContent=f(dis);
+  document.getElementById('ld-c').textContent='-'+f(chg);
+  const ne=document.getElementById('ld-n');
+  ne.textContent=(net>=0?'+':'')+f(net);
+  ne.style.color=net>=0?'var(--accent3)':'var(--accent2)';
+  document.getElementById('ld-s').textContent=LD.soc+'%';
+  const me=document.getElementById('ld-m');
+  me.textContent=LD.mode;
+  me.style.color=LD.mode==='DISCHARGING'?'var(--accent3)':LD.mode==='CHARGING'?'var(--accent2)':'var(--warn)';
+  try{
+    const d=new Date(ts);
+    document.getElementById('ld-t').textContent=d.toLocaleTimeString('en-US',{timeZone:'America/Chicago',hour:'2-digit',minute:'2-digit'})+' CDT';
+  }catch(_){document.getElementById('ld-t').textContent='Now';}
+  document.getElementById('ld-src').textContent=source;
+  document.getElementById('live-anchor').textContent=`· Live: ${dis.toLocaleString()} MW discharge / ${chg.toLocaleString()} MW charge`;
+  document.getElementById('soc-tag').textContent='LIVE-INFERRED';
+  document.getElementById('soc-box').innerHTML=`
+    Discharge: <span style="color:var(--accent3)">${dis.toLocaleString()} MW</span> &nbsp;|&nbsp; Charging: <span style="color:var(--accent2)">${chg.toLocaleString()} MW</span><br>
+    Inferred SoC: <span style="color:var(--warn)">${LD.soc}%</span> — <span style="color:var(--you)">${LD.mode}</span> mode<br>
+    SB ~18% → est. <span style="color:var(--sb)">${Math.round(dis*.18)} MW</span> of current discharge<br>
+    <span style="color:var(--text3);font-size:8px;">${source}</span>
+  `;
   if(socAutoMode){document.getElementById('fleet-soc').value=LD.soc;recalc();}
 }
 
-function updateStrip(){
-  const f=n=>n!=null?n.toLocaleString()+' MW':'—';
-  document.getElementById('ld-d').textContent=f(LD.discharge);
-  document.getElementById('ld-c').textContent=LD.charge!=null?'-'+f(LD.charge):'—';
-  const ne=document.getElementById('ld-n');
-  ne.textContent=LD.net!=null?(LD.net>=0?'+':'')+f(LD.net):'—';
-  ne.style.color=LD.net>=0?'var(--accent3)':'var(--accent2)';
-  document.getElementById('ld-s').textContent=LD.soc!=null?LD.soc+'%':'—';
-  const me=document.getElementById('ld-m');
-  me.textContent=LD.mode||'—';
-  me.style.color=LD.mode==='DISCHARGING'?'var(--accent3)':LD.mode==='CHARGING'?'var(--accent2)':'var(--warn)';
-  try{
-    const ts=new Date(LD.ts);
-    document.getElementById('ld-t').textContent=ts.toLocaleTimeString('en-US',{timeZone:'America/Chicago',hour:'2-digit',minute:'2-digit'})+' CDT';
-  }catch(_){document.getElementById('ld-t').textContent='Now';}
-  document.getElementById('ld-src').textContent=LD.source||'ERCOT ESR';
-  document.getElementById('live-anchor').textContent=LD.ok?`· Live: ${LD.discharge?.toLocaleString()} MW discharge / ${LD.charge?.toLocaleString()} MW charge`:'';
-  document.getElementById('soc-tag').textContent=LD.ok?'LIVE-INFERRED':'ESTIMATED';
-  document.getElementById('soc-box').innerHTML=LD.ok?`
-    Discharge: <span style="color:var(--accent3)">${LD.discharge?.toLocaleString()} MW</span> &nbsp;|&nbsp;
-    Charging: <span style="color:var(--accent2)">${LD.charge?.toLocaleString()} MW</span><br>
-    Inferred fleet SoC: <span style="color:var(--warn)">${LD.soc}%</span> — <span style="color:var(--you)">${LD.mode}</span> mode<br>
-    SB ~18% share → est. <span style="color:var(--sb)">${Math.round((LD.discharge||0)*.18)} MW</span> of current discharge<br>
-    <span style="color:var(--text3);font-size:8px;">Source: ${LD.source}</span>
-  `:'Fetching live data...';
-}
-
 function setBadge(t,txt){
-  const b=document.getElementById('badge');
-  b.className='badge b-'+t;
+  const b=document.getElementById('badge');b.className='badge b-'+t;
   b.querySelector('.dot').className='dot'+(t==='live'?' pulse':'');
   document.getElementById('badge-txt').textContent=txt;
 }
-function setStatus(txt){document.getElementById('fetch-status').textContent=txt;}
-function socManual(){
-  socAutoMode=false;
-  document.getElementById('soc-lbl').textContent='[MANUAL]';
-  document.getElementById('soc-lbl').style.color='var(--warn)';
-  recalc();
-}
+function socManual(){socAutoMode=false;document.getElementById('soc-lbl').textContent='[MANUAL]';document.getElementById('soc-lbl').style.color='var(--warn)';recalc();}
 
-// ── Charts ──────────────────────────────────────────────────────
 let OC,TC;
 function initCharts(){
   const dpr=window.devicePixelRatio||1;
-  ['offerChart','timeChart'].forEach(id=>{
-    const c=document.getElementById(id),h=id==='offerChart'?280:180;
-    c.width=c.offsetWidth*dpr;c.height=h*dpr;c.getContext('2d').scale(dpr,dpr);
-  });
+  ['offerChart','timeChart'].forEach(id=>{const c=document.getElementById(id),h=id==='offerChart'?280:180;c.width=c.offsetWidth*dpr;c.height=h*dpr;c.getContext('2d').scale(dpr,dpr);});
   OC={ctx:document.getElementById('offerChart').getContext('2d'),canvas:document.getElementById('offerChart')};
   TC={ctx:document.getElementById('timeChart').getContext('2d'),canvas:document.getElementById('timeChart')};
 }
-const gW=c=>c.canvas.width/(window.devicePixelRatio||1);
-const gH=c=>c.canvas.height/(window.devicePixelRatio||1);
+const gW=c=>c.canvas.width/(window.devicePixelRatio||1),gH=c=>c.canvas.height/(window.devicePixelRatio||1);
 
 function drawOffer(sb,you,rest,bands){
-  const ctx=OC.ctx,W=gW(OC),H=gH(OC),pad={l:55,r:20,t:20,b:40};
-  const cW=W-pad.l-pad.r,cH=H-pad.t-pad.b;
+  const ctx=OC.ctx,W=gW(OC),H=gH(OC),pad={l:55,r:20,t:20,b:40},cW=W-pad.l-pad.r,cH=H-pad.t-pad.b;
   ctx.clearRect(0,0,W,H);ctx.fillStyle='#0d1117';ctx.fillRect(0,0,W,H);
-  const pMax=bands[bands.length-1]*1.1,mMax=Math.max(...sb.map((v,i)=>v+(you[i]||0)+(rest[i]||0)))*1.15;
-  const bW=cW/bands.length;
+  const pMax=bands[bands.length-1]*1.1,mMax=Math.max(...sb.map((v,i)=>v+(you[i]||0)+(rest[i]||0)))*1.15,bW=cW/bands.length;
   ctx.strokeStyle='#1e2d3d';ctx.lineWidth=1;
   for(let i=0;i<=5;i++){const y=pad.t+cH-(i/5)*cH;ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(pad.l+cW,y);ctx.stroke();ctx.fillStyle='#3d5570';ctx.font='9px IBM Plex Mono';ctx.textAlign='right';ctx.fillText('$'+Math.round((i/5)*pMax),pad.l-6,y+3);}
   bands.forEach((p,i)=>{
-    const x=pad.l+i*bW+2,bw=bW-4;
-    const rH=(rest[i]/mMax)*cH;ctx.fillStyle='rgba(0,212,255,.18)';ctx.fillRect(x,pad.t+cH-rH,bw,rH);
+    const x=pad.l+i*bW+2,bw=bW-4,rH=(rest[i]/mMax)*cH;
+    ctx.fillStyle='rgba(0,212,255,.18)';ctx.fillRect(x,pad.t+cH-rH,bw,rH);
     const sH=(sb[i]/mMax)*cH;ctx.fillStyle='rgba(139,92,246,.55)';ctx.fillRect(x,pad.t+cH-rH-sH,bw,sH);
     const g=ctx.createLinearGradient(x,pad.t+cH-rH-sH,x,pad.t+cH-rH-sH+6);g.addColorStop(0,'rgba(139,92,246,.9)');g.addColorStop(1,'rgba(139,92,246,0)');ctx.fillStyle=g;ctx.fillRect(x,pad.t+cH-rH-sH,bw,6);
     if(you[i]>0){const yH=(you[i]/mMax)*cH;ctx.fillStyle='rgba(57,255,20,.65)';ctx.fillRect(x+bw*.25,pad.t+cH-rH-sH-yH-4,bw*.5,yH);ctx.shadowColor='#39ff14';ctx.shadowBlur=8;ctx.fillStyle='rgba(57,255,20,.9)';ctx.fillRect(x+bw*.25,pad.t+cH-rH-sH-yH-4,bw*.5,2);ctx.shadowBlur=0;}
@@ -408,141 +318,68 @@ function drawOffer(sb,you,rest,bands){
 }
 
 function drawTime(sb,you,prices,labels,liveNow){
-  const ctx=TC.ctx,W=gW(TC),H=gH(TC),pad={l:55,r:55,t:15,b:30};
-  const cW=W-pad.l-pad.r,cH=H-pad.t-pad.b,n=sb.length;
+  const ctx=TC.ctx,W=gW(TC),H=gH(TC),pad={l:55,r:55,t:15,b:30},cW=W-pad.l-pad.r,cH=H-pad.t-pad.b,n=sb.length;
   ctx.clearRect(0,0,W,H);ctx.fillStyle='#0d1117';ctx.fillRect(0,0,W,H);
   const mMax=Math.max(...sb,...you,liveNow||0)*1.25,pMax=Math.max(...prices)*1.15;
   ctx.strokeStyle='#1e2d3d';ctx.lineWidth=1;
   for(let i=0;i<=4;i++){const y=pad.t+cH-(i/4)*cH;ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(pad.l+cW,y);ctx.stroke();ctx.fillStyle='#3d5570';ctx.font='9px IBM Plex Mono';ctx.textAlign='right';ctx.fillText(Math.round((i/4)*mMax)+'MW',pad.l-4,y+3);}
-  function areaLine(arr,stroke,gTop,gBot){
-    ctx.beginPath();ctx.moveTo(pad.l,pad.t+cH);
-    arr.forEach((v,i)=>ctx.lineTo(pad.l+(i/(n-1))*cW,pad.t+cH-(v/mMax)*cH));
-    ctx.lineTo(pad.l+cW,pad.t+cH);
-    const g=ctx.createLinearGradient(0,pad.t,0,pad.t+cH);g.addColorStop(0,gTop);g.addColorStop(1,gBot);ctx.fillStyle=g;ctx.fill();
+  function aL(arr,stroke,gT,gB){
+    ctx.beginPath();ctx.moveTo(pad.l,pad.t+cH);arr.forEach((v,i)=>ctx.lineTo(pad.l+(i/(n-1))*cW,pad.t+cH-(v/mMax)*cH));ctx.lineTo(pad.l+cW,pad.t+cH);
+    const g=ctx.createLinearGradient(0,pad.t,0,pad.t+cH);g.addColorStop(0,gT);g.addColorStop(1,gB);ctx.fillStyle=g;ctx.fill();
     ctx.beginPath();arr.forEach((v,i)=>{const x=pad.l+(i/(n-1))*cW,y=pad.t+cH-(v/mMax)*cH;i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);});ctx.strokeStyle=stroke;ctx.lineWidth=2;ctx.stroke();
   }
-  areaLine(sb,'rgba(139,92,246,.85)','rgba(139,92,246,.35)','rgba(139,92,246,.02)');
-  ctx.shadowColor='#39ff14';ctx.shadowBlur=6;
-  areaLine(you,'rgba(57,255,20,.9)','rgba(57,255,20,.25)','rgba(57,255,20,.01)');
-  ctx.shadowBlur=0;
+  aL(sb,'rgba(139,92,246,.85)','rgba(139,92,246,.35)','rgba(139,92,246,.02)');
+  ctx.shadowColor='#39ff14';ctx.shadowBlur=6;aL(you,'rgba(57,255,20,.9)','rgba(57,255,20,.25)','rgba(57,255,20,.01)');ctx.shadowBlur=0;
   ctx.beginPath();prices.forEach((v,i)=>{const x=pad.l+(i/(n-1))*cW,y=pad.t+cH-(v/pMax)*cH;i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);});ctx.strokeStyle='rgba(255,215,0,.7)';ctx.lineWidth=1.5;ctx.setLineDash([4,3]);ctx.stroke();ctx.setLineDash([]);
   for(let i=0;i<=4;i++){const y=pad.t+cH-(i/4)*cH;ctx.fillStyle='rgba(255,215,0,.5)';ctx.font='8px IBM Plex Mono';ctx.textAlign='left';ctx.fillText('$'+Math.round((i/4)*pMax),pad.l+cW+4,y+3);}
   if(liveNow>0){const ly=pad.t+cH-(liveNow/mMax)*cH;ctx.beginPath();ctx.moveTo(pad.l,ly);ctx.lineTo(pad.l+cW,ly);ctx.strokeStyle='rgba(0,212,255,.5)';ctx.lineWidth=1;ctx.setLineDash([3,4]);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle='#00d4ff';ctx.font='bold 8px IBM Plex Mono';ctx.textAlign='right';ctx.fillText('LIVE: '+liveNow.toLocaleString()+'MW',pad.l+cW,ly-3);}
   labels.forEach((l,i)=>{const x=pad.l+(i/(n-1))*cW;ctx.fillStyle='#3d5570';ctx.font='8px IBM Plex Mono';ctx.textAlign='center';ctx.fillText(l,x,pad.t+cH+14);});
 }
 
-// ── Recalc ──────────────────────────────────────────────────────
 function recalc(){
-  const rt=document.getElementById('ramp-type').value;
-  const rr=+document.getElementById('ramp-rate').value;
-  const soc=+document.getElementById('fleet-soc').value;
-  const da=+document.getElementById('da-pos').value;
-  const hp=+document.getElementById('hub-price').value;
-  const as=document.getElementById('anc-sat').value;
-
+  const rt=document.getElementById('ramp-type').value,rr=+document.getElementById('ramp-rate').value;
+  const soc=+document.getElementById('fleet-soc').value,da=+document.getElementById('da-pos').value;
+  const hp=+document.getElementById('hub-price').value,as=document.getElementById('anc-sat').value;
   document.getElementById('v-ramp').innerHTML=rr+' <span class="cu">GW/hr</span>';
   document.getElementById('v-soc').innerHTML=soc+' <span class="cu">%</span>';
   document.getElementById('v-da').innerHTML=da+' <span class="cu">%</span>';
   document.getElementById('v-price').innerHTML='$'+hp+' <span class="cu">/MWh</span>';
-
   const SB=2450,sbAvail=Math.round(SB*(soc/100)*(1-da/200));
   document.getElementById('m-avail').textContent=sbAvail.toLocaleString();
   const rt2=100-da,anc=as==='low'?25:as==='med'?15:8,spike=Math.max(0,rt2-anc-15);
-  document.getElementById('s-da').textContent=da+'%';document.getElementById('b-da').style.width=da+'%';
-  document.getElementById('s-rt').textContent=rt2+'%';document.getElementById('b-rt').style.width=rt2+'%';
-  document.getElementById('s-anc').textContent='~'+anc+'%';document.getElementById('b-anc').style.width=anc+'%';
-  document.getElementById('s-avail').textContent=spike+'%';document.getElementById('b-avail').style.width=spike+'%';
-
-  const bands=[20,50,75,100,150,200,300,500];
-  const base=SB*(soc/100),daL=base*(da/100),rtA=base*(rt2/100);
-  const sbCurve=bands.map((_,i)=>{
-    if(i<2)return Math.round(daL*(i===0?.15:.35));
-    if(i<4)return Math.round(daL*(i===2?.3:.2)+rtA*(i===3?.3:.1));
-    const f=as==='high'?[.3,.2,.1,0]:as==='med'?[.25,.2,.15,.1]:[.1,.15,.2,.15];
-    return Math.round(rtA*(f[i-4]||0));
-  });
-  const nonSB=15700-SB;
-  const restCurve=bands.map((_,i)=>Math.round(nonSB*[.04,.12,.22,.26,.18,.10,.05,.03][i]));
-  const youCurve=bands.map((_,i)=>Math.round(420*(da>60?[0,0,.05,.1,.35,.3,.15,.05]:[0,.05,.15,.3,.3,.15,.05,0])[i]));
-
-  const labels=['T-60m','T-45m','T-30m','T-15m','PEAK','T+15m','T+30m'];
-  const liveNow=LD.discharge;
-  const sbNow=liveNow?Math.round(liveNow*.18):sbAvail*.2;
-  const sbDisp=labels.map((_,i)=>i===0?sbNow:Math.round(sbAvail*[.2,.45,.75,.95,1,.75,.4][i]));
-  const youDisp=labels.map((_,i)=>Math.round(420*(da>60?[0,.05,.15,.5,.95,1,.7]:[.1,.3,.65,.85,1,.85,.5])[i]));
-  const pDisp=labels.map((_,i)=>Math.round(hp*[.4,.55,.75,.9,1,.8,.5][i]*(rr/28)*((100-soc)/100*.5+.5)));
-
-  drawOffer(sbCurve,youCurve,restCurve,bands);
-  drawTime(sbDisp,youDisp,pDisp,labels,liveNow);
-
+  ['da','rt','anc','avail'].forEach((k,i)=>{const v=[da,rt2,anc,spike][i];document.getElementById('s-'+k).textContent=(k==='anc'?'~':'')+v+'%';document.getElementById('b-'+k).style.width=v+'%';});
+  const bands=[20,50,75,100,150,200,300,500],base=SB*(soc/100),daL=base*(da/100),rtA=base*(rt2/100);
+  const sbC=bands.map((_,i)=>{if(i<2)return Math.round(daL*(i===0?.15:.35));if(i<4)return Math.round(daL*(i===2?.3:.2)+rtA*(i===3?.3:.1));return Math.round(rtA*({high:[.3,.2,.1,0],med:[.25,.2,.15,.1],low:[.1,.15,.2,.15]}[as][i-4]||0));});
+  const nonSB=15700-SB,restC=bands.map((_,i)=>Math.round(nonSB*[.04,.12,.22,.26,.18,.10,.05,.03][i]));
+  const youC=bands.map((_,i)=>Math.round(420*(da>60?[0,0,.05,.1,.35,.3,.15,.05]:[0,.05,.15,.3,.3,.15,.05,0])[i]));
+  const labels=['T-60m','T-45m','T-30m','T-15m','PEAK','T+15m','T+30m'],lN=LD.discharge;
+  const sbD=labels.map((_,i)=>i===0?(lN?Math.round(lN*.18):sbAvail*.2):Math.round(sbAvail*[.2,.45,.75,.95,1,.75,.4][i]));
+  const youD=labels.map((_,i)=>Math.round(420*(da>60?[0,.05,.15,.5,.95,1,.7]:[.1,.3,.65,.85,1,.85,.5])[i]));
+  const pD=labels.map((_,i)=>Math.round(hp*[.4,.55,.75,.9,1,.8,.5][i]*(rr/28)*((100-soc)/100*.5+.5)));
+  drawOffer(sbC,youC,restC,bands);drawTime(sbD,youD,pD,labels,lN);
   const af=as==='low'?'$12':as==='med'?'$5':'$2';
-  document.getElementById('trigger-tbl').innerHTML=[
-    ['DA Energy','$'+Math.round(hp*.85),'HIGH'],
-    ['ECRS',as==='low'?'$45-80':as==='med'?'$20-50':'$5-20',as==='low'?'HIGH':'MED'],
-    ['Non-Spin',af+'-$25','MED'],['Reg-Up',af+'-$15','MED'],
-    ['RT Energy','$'+Math.round(hp*.9)+'+',rr>35?'HIGH':'LOW'],
-  ].map(([p,v,c])=>`<tr><td>${p}</td><td style="color:var(--text)">${v}</td><td><span class="cp cp-${c.toLowerCase()}">${c}</span></td></tr>`).join('');
-
+  document.getElementById('trigger-tbl').innerHTML=[['DA Energy','$'+Math.round(hp*.85),'HIGH'],['ECRS',as==='low'?'$45-80':as==='med'?'$20-50':'$5-20',as==='low'?'HIGH':'MED'],['Non-Spin',af+'-$25','MED'],['Reg-Up',af+'-$15','MED'],['RT Energy','$'+Math.round(hp*.9)+'+',rr>35?'HIGH':'LOW']].map(([p,v,c])=>`<tr><td>${p}</td><td style="color:var(--text)">${v}</td><td><span class="cp cp-${c.toLowerCase()}">${c}</span></td></tr>`).join('');
   let cs=0;const cf=[];
-  if(LD.ok&&!LD.source.includes('Typical')){cf.push('+Live ERCOT ESR data integrated');cs+=3;}
+  if(LD.ok){cf.push('+Live ERCOT ESR data (GitHub Action)');cs+=3;}
   if(rr>35){cf.push('+High ramp → stronger signal');cs+=2;}
-  if(soc>50&&soc<85){cf.push('+SoC in typical operating range');cs+=2;}
-  if(da>55){cf.push('+DA position aligns w/ SB newsletter');cs+=2;}
-  else cf.push('—DA position uncertain');
+  if(soc>50&&soc<85){cf.push('+SoC in typical range');cs+=2;}
+  if(da>55){cf.push('+DA position aligns w/ SB newsletter');cs+=2;}else cf.push('—DA position uncertain');
   if(rt==='solar'){cf.push('+Solar ramp most predictable');cs+=1;}
   if(hp>200){cf.push('—Extreme price may trigger override');cs-=1;}
   const cl=cs>=7?'HIGH':cs>=4?'MEDIUM':'LOW';
   document.getElementById('conf-tag').textContent=cl;
   document.getElementById('conf-factors').innerHTML=cf.map(f=>`<div style="color:${f.startsWith('+')?'var(--accent3)':'var(--accent2)'}">${f}</div>`).join('');
-
   const ab=document.getElementById('alert-box');ab.className='alert';
-  if(LD.mode==='DISCHARGING'&&rr>35){ab.classList.add('show','a-warn');ab.textContent='⚠ LIVE: Fleet already discharging hard ('+LD.discharge+' MW). SoC draining — RT scarcity window may open sooner.';}
-  else if(LD.mode==='CHARGING'){ab.classList.add('show','a-good');ab.textContent='✓ LIVE: Fleet net charging ('+LD.charge+' MW absorbing). SoC building — strong discharge expected at next downramp.';}
-  else if(rr>40){ab.classList.add('show','a-warn');ab.textContent='⚠ Extreme ramp — SB likely saturates early. RT window opens T-10m to PEAK.';}
-
+  if(LD.mode==='DISCHARGING'&&rr>35){ab.classList.add('show','a-warn');ab.textContent='⚠ LIVE: Fleet discharging hard ('+LD.discharge+' MW). RT scarcity window may open sooner.';}
+  else if(LD.mode==='CHARGING'){ab.classList.add('show','a-good');ab.textContent='✓ LIVE: Fleet charging ('+LD.charge+' MW). SoC building — strong discharge expected at next downramp.';}
+  else if(rr>40){ab.classList.add('show','a-warn');ab.textContent='⚠ Extreme ramp — SB saturates early. RT window opens T-10m to PEAK.';}
   const rtl={solar:'solar sunset',wind:'wind drop',both:'combined solar/wind',load:'demand spike'}[rt];
-  document.getElementById('sb-behavior').innerHTML=`
-    <div class="sl">Event type: <span>${rtl} @ ${rr} GW/hr</span></div>
-    <div class="sl">Fleet SoC: <span>${soc}% → SB ~${sbAvail} MW available</span></div>
-    <div class="sl">DA commitment: <span>${da}% locked in day-ahead</span></div>
-    <div class="sl">Strategy mode: <span>${da>60?'"Mt. Blue Sky" — heavy DA + ECRS':'RT-heavy — holding for price spikes'}</span></div>
-    ${LD.ok?`<div class="sl">Live: <span>Fleet ${LD.mode} — ${LD.discharge} MW / -${LD.charge} MW now</span></div>`:''}
-  `;
-  document.getElementById('sb-offer-detail').innerHTML=`
-    <div class="sl">• Low bands ($20–75): <span>~${Math.round(daL*.5)} MW DA committed, inelastic</span></div>
-    <div class="sl">• Mid bands ($75–150): <span>~${Math.round(daL*.5+rtA*.4)} MW blended DA/RT</span></div>
-    <div class="sl">• High bands ($150+): <span>~${Math.round(rtA*(as==='high'?.6:.3))} MW RT held-back, elastic</span></div>
-    <div class="sl">• Withdrawal: <span>SoC &lt;${as==='low'?20:15}% or price &lt;$${as==='high'?8:15}/MWh</span></div>
-  `;
-  document.getElementById('counter-strat').innerHTML=da>60?`
-    <div class="sl">→ <span>SB is DA-heavy. They burn capacity early.</span></div>
-    <div class="sl">→ <span>DELAY discharge to T-15m before peak</span></div>
-    <div class="sl">→ <span>Hold 80–90% SoC into peak window</span></div>
-    <div class="sl">→ <span>Target RT bands $${Math.round(hp*.9)}–$${Math.round(hp*1.4)}/MWh</span></div>
-    ${LD.mode==='DISCHARGING'?'<div class="sl">→ <span class="c-accent">LIVE: Fleet discharging — patience advantage ACTIVE NOW</span></div>':''}
-  `:`
-    <div class="sl">→ <span>SB is RT-positioned. Enter earlier on ancillaries.</span></div>
-    <div class="sl">→ <span>Target ECRS + Non-Spin before energy</span></div>
-    <div class="sl">→ <span>Nodal premium if congested node</span></div>
-    ${LD.mode==='CHARGING'?'<div class="sl">→ <span class="c-accent">LIVE: Fleet charging — SoC building for evening</span></div>':''}
-  `;
+  document.getElementById('sb-behavior').innerHTML=`<div class="sl">Event: <span>${rtl} @ ${rr} GW/hr</span></div><div class="sl">Fleet SoC: <span>${soc}% → SB ~${sbAvail} MW available</span></div><div class="sl">DA commitment: <span>${da}% locked</span></div><div class="sl">Mode: <span>${da>60?'"Mt. Blue Sky" — heavy DA + ECRS':'RT-heavy — holding for spikes'}</span></div>${LD.ok?`<div class="sl">Live: <span>Fleet ${LD.mode} — ${LD.discharge} / -${LD.charge} MW</span></div>`:''}`;
+  document.getElementById('sb-offer-detail').innerHTML=`<div class="sl">• Low ($20–75): <span>~${Math.round(daL*.5)} MW DA, inelastic</span></div><div class="sl">• Mid ($75–150): <span>~${Math.round(daL*.5+rtA*.4)} MW blended</span></div><div class="sl">• High ($150+): <span>~${Math.round(rtA*(as==='high'?.6:.3))} MW RT, elastic</span></div><div class="sl">• Withdrawal: <span>SoC &lt;${as==='low'?20:15}% or &lt;$${as==='high'?8:15}/MWh</span></div>`;
+  document.getElementById('counter-strat').innerHTML=da>60?`<div class="sl">→ <span>SB is DA-heavy — they burn capacity early</span></div><div class="sl">→ <span>DELAY discharge to T-15m before peak</span></div><div class="sl">→ <span>Hold 80–90% SoC into peak window</span></div><div class="sl">→ <span>Target RT $${Math.round(hp*.9)}–$${Math.round(hp*1.4)}/MWh</span></div>${LD.mode==='DISCHARGING'?'<div class="sl">→ <span class="c-accent">LIVE: patience advantage ACTIVE NOW</span></div>':''}`:`<div class="sl">→ <span>SB is RT-positioned — enter earlier on ancillaries</span></div><div class="sl">→ <span>Target ECRS + Non-Spin before energy</span></div><div class="sl">→ <span>Nodal premium if congested node</span></div>`;
   const sbA=Math.round(hp*(da>60?.88:.92)),youA=Math.round(hp*(da>60?1.08:.99));
-  document.getElementById('rev-tbl').innerHTML=`
-    <tr><td>DA Energy</td><td class="c-sb">$${Math.round(hp*.9)}</td><td class="c-you">${da>60?'<em style="color:var(--text3)">skip</em>':'$'+Math.round(hp*.95)}</td><td class="${da>60?'c-warn':'c-green'}">${da>60?'hold':'+'+(hp*.05).toFixed(0)}</td></tr>
-    <tr><td>RT Peak</td><td class="c-sb">$${sbA}</td><td class="c-you">$${youA}</td><td class="c-green">+$${youA-sbA}</td></tr>
-    <tr><td>Ancillary</td><td class="c-sb">${as==='low'?'$55':as==='med'?'$28':'$9'}</td><td class="c-you">${as==='low'?'$60':as==='med'?'$32':'$12'}</td><td class="c-green">+$4</td></tr>
-  `;
-  document.getElementById('timing').innerHTML=da>60?`
-    <div>T-60m: <span style="color:var(--sb)">SB burning DA commitments</span>${LD.mode==='DISCHARGING'?' ← <span class="c-accent">LIVE NOW</span>':''}</div>
-    <div>T-30m to T-10m: <span style="color:var(--warn)">SB SoC declining — build your stack</span></div>
-    <div>T-10m to PEAK: <span class="c-green">YOUR WINDOW — max RT discharge</span></div>
-    <div>PEAK to T+15m: <span class="c-accent">Ancillary capture — SB exiting</span></div>
-  `:`
-    <div>T-60m: <span style="color:var(--text2)">Watch SB RT stack build</span></div>
-    <div>T-30m: <span style="color:var(--warn)">Enter early on ancillaries</span></div>
-    <div>PEAK: <span class="c-green">Energy discharge — nodal edge</span></div>
-    <div>T+15m: <span class="c-accent">Hold 10% for post-peak products</span></div>
-  `;
+  document.getElementById('rev-tbl').innerHTML=`<tr><td>DA Energy</td><td class="c-sb">$${Math.round(hp*.9)}</td><td class="c-you">${da>60?'<em style="color:var(--text3)">skip</em>':'$'+Math.round(hp*.95)}</td><td class="${da>60?'c-warn':'c-green'}">${da>60?'hold':'+'+(hp*.05).toFixed(0)}</td></tr><tr><td>RT Peak</td><td class="c-sb">$${sbA}</td><td class="c-you">$${youA}</td><td class="c-green">+$${youA-sbA}</td></tr><tr><td>Ancillary</td><td class="c-sb">${as==='low'?'$55':as==='med'?'$28':'$9'}</td><td class="c-you">${as==='low'?'$60':as==='med'?'$32':'$12'}</td><td class="c-green">+$4</td></tr>`;
+  document.getElementById('timing').innerHTML=da>60?`<div>T-60m: <span style="color:var(--sb)">SB burning DA</span>${LD.mode==='DISCHARGING'?' ← <span class="c-accent">LIVE NOW</span>':''}</div><div>T-30m to T-10m: <span style="color:var(--warn)">SB SoC declining — build your stack</span></div><div>T-10m to PEAK: <span class="c-green">YOUR WINDOW — max RT discharge</span></div><div>PEAK to T+15m: <span class="c-accent">Ancillary capture — SB exiting</span></div>`:`<div>T-60m: <span style="color:var(--text2)">Watch SB RT stack build</span></div><div>T-30m: <span style="color:var(--warn)">Enter early on ancillaries</span></div><div>PEAK: <span class="c-green">Energy discharge — nodal edge</span></div><div>T+15m: <span class="c-accent">Hold 10% for post-peak</span></div>`;
 }
 
 window.addEventListener('load',()=>{initCharts();recalc();fetchLive();});
