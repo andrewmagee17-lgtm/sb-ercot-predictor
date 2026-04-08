@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='12' fill='%23080c10'/><text y='72' x='50' text-anchor='middle' font-size='60' fill='%2300d4ff'>⚡</text></svg>">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <title>ERCOT SOC Predictor</title>
@@ -119,6 +120,11 @@ canvas{width:100%;display:block;}
     <div class="ls-sub" id="ld-src">GitHub Action → data.json</div>
     <button class="btn-sm" onclick="fetchLive()">↻ REFRESH</button>
   </div>
+</div>
+
+<!-- SEED WARNING BANNER -->
+<div id="seed-warning" style="display:none;background:rgba(255,107,53,.08);border:1px solid rgba(255,107,53,.3);border-left:3px solid var(--accent2);padding:8px 14px;margin-bottom:12px;font-size:9px;color:var(--accent2);letter-spacing:.05em;">
+  ⚠ SHOWING ESTIMATED DATA — GitHub Action has not run yet. Go to <strong>github.com/andrewmagee17-lgtm/sb-ercot-predictor/actions</strong> → Run workflow to load live ERCOT numbers. Discharge/charge figures above are spring-typical estimates.
 </div>
 
 <!-- 10-DAY SOC CURVE -->
@@ -290,7 +296,11 @@ async function fetchLive() {
     drawSocCurve();
     if (socAutoMode) { document.getElementById('fleet-soc').value = LD.soc; recalc(); }
 
-    setBadge(d.status==='live' ? 'live' : 'stale',
+    // Show seed warning if not live
+  const warn = document.getElementById('seed-warning');
+  if (warn) warn.style.display = d.status === 'seed' ? 'block' : 'none';
+
+  setBadge(d.status==='live' ? 'live' : 'stale',
              d.status==='live' ? 'LIVE ERCOT DATA' : 'SEED DATA');
 
     // Update history badge
