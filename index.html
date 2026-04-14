@@ -123,6 +123,7 @@ canvas{width:100%;display:block;}
 </div>
 
 <!-- SEED WARNING BANNER -->
+<div id="stale-warning" style="display:none;background:rgba(255,215,0,.08);border:1px solid rgba(255,215,0,.3);border-left:3px solid var(--warn);padding:8px 14px;margin-bottom:8px;font-size:9px;color:var(--warn);letter-spacing:.05em;"></div>
 <div id="seed-warning" style="display:none;background:rgba(255,107,53,.08);border:1px solid rgba(255,107,53,.3);border-left:3px solid var(--accent2);padding:8px 14px;margin-bottom:12px;font-size:9px;color:var(--accent2);letter-spacing:.05em;">
   ⚠ SHOWING ESTIMATED DATA — GitHub Action has not run yet. Go to <strong>github.com/andrewmagee17-lgtm/sb-ercot-predictor/actions</strong> → Run workflow to load live ERCOT numbers. Discharge/charge figures above are spring-typical estimates.
 </div>
@@ -296,7 +297,22 @@ async function fetchLive() {
     drawSocCurve();
     if (socAutoMode) { document.getElementById('fleet-soc').value = LD.soc; recalc(); }
 
-    // Show seed warning if not live
+    // Staleness indicator — show warning if data > 15 min old
+  try {
+    const fetched = new Date(d.fetched_utc);
+    const ageMin  = (Date.now() - fetched) / 60000;
+    const staleEl = document.getElementById('stale-warning');
+    if (staleEl) {
+      if (ageMin > 15) {
+        staleEl.style.display = 'block';
+        staleEl.textContent   = `⚠ Data is ${Math.round(ageMin)} min old — GitHub Action may be delayed. Last update: ${fetched.toLocaleTimeString('en-US',{timeZone:'America/Chicago',hour:'2-digit',minute:'2-digit'})} CDT`;
+      } else {
+        staleEl.style.display = 'none';
+      }
+    }
+  } catch(_) {}
+
+  // Show seed warning if not live
   const warn = document.getElementById('seed-warning');
   if (warn) warn.style.display = d.status === 'seed' ? 'block' : 'none';
 
@@ -644,7 +660,26 @@ window.addEventListener('load', ()=>{
   // Guaranteed refresh every 5 minutes regardless of fetch success/failure
   setInterval(fetchLive, 5 * 60 * 1000);
   // Also refresh every minute just to update the clock-based SoC estimate
-  setInterval(()=>{ if(LD.ok) recalc(); }, 60 * 1000);
+  setInterval(()=>{
+    if(LD.ok) {
+      recalc();
+      // Update staleness warning every minute
+      try {
+        const fetched = new Date(LD.ts);
+        const ageMin  = (Date.now() - fetched) / 60000;
+        const staleEl = document.getElementById('stale-warning');
+        if (staleEl) {
+          if (ageMin > 15) {
+            staleEl.style.display = 'block';
+            staleEl.textContent   = `⚠ Data is ${Math.round(ageMin)} min old — GitHub Action may be delayed. Last update: ${fetched.toLocaleTimeString('en-US',{timeZone:'America/Chicago',hour:'2-digit',minute:'2-digit'})} CDT`;
+            setBadge('stale', `STALE — ${Math.round(ageMin)}min ago`);
+          } else {
+            staleEl.style.display = 'none';
+          }
+        }
+      } catch(_) {}
+    }
+  }, 60 * 1000);
 });
 window.addEventListener('resize', ()=>{ initCharts(); recalc(); drawSocCurve(); });
 </script>

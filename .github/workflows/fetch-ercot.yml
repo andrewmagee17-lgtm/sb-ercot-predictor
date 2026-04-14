@@ -2,28 +2,27 @@ name: Fetch ERCOT ESR Data
 
 on:
   schedule:
-    # Run every 5 minutes - multiple entries increases reliability on GitHub's scheduler
     - cron: '0,5,10,15,20,25,30,35,40,45,50,55 * * * *'
   workflow_dispatch:
-  # Also trigger on push to main to self-heal after deploys
   push:
     branches: [main]
 
 permissions:
   contents: write
-  actions: write
 
 jobs:
   fetch:
     runs-on: ubuntu-latest
+    timeout-minutes: 4
     steps:
       - name: Checkout gh-pages
         uses: actions/checkout@v4
         with:
           ref: gh-pages
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # Shallow clone — no history needed, keeps checkout fast
+          fetch-depth: 1
 
-      - name: Fetch ERCOT ESR data + build SoC model
+      - name: Fetch + update
         run: |
           python3 - << 'PYEOF'
           import urllib.request, json, datetime, sys
@@ -32,118 +31,89 @@ jobs:
           BASE = 'https://www.ercot.com/api/1/services/read/dashboards/energy-storage-resources.json'
           HEADERS = {
             'Accept': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (compatible; ERCOT-Data-Fetcher/1.0)',
+            'User-Agent': 'Mozilla/5.0 (compatible; ERCOT-Fetcher/2.0)',
             'Referer': 'https://www.ercot.com/gridmktinfo/dashboards/energystorageresources'
           }
 
           now_utc = datetime.datetime.now(datetime.timezone.utc)
           cdt     = datetime.timezone(datetime.timedelta(hours=-5))
           now_cdt = now_utc.astimezone(cdt)
+          print(f"Run at {now_utc:%H:%M:%S UTC} / {now_cdt:%H:%M CDT}")
 
-          print(f"Fetching at {now_utc.strftime('%H:%M:%S UTC')} ({now_cdt.strftime('%H:%M CDT')})")
-
-          # ── Fetch current snapshot ─────────────────────────────
+          # ── Fetch ERCOT ────────────────────────────────────────
           try:
             req = urllib.request.Request(BASE, headers=HEADERS)
-            with urllib.request.urlopen(req, timeout=15) as r:
+            with urllib.request.urlopen(req, timeout=12) as r:
               raw = json.loads(r.read())
 
-            current = raw.get('currentDay',  {}).get('data', []) or raw.get('currentDay',  [])
-            prev    = raw.get('previousDay', {}).get('data', []) or raw.get('previousDay', [])
+            current = raw.get('currentDay',  {}).get('data', []) or []
+            prev    = raw.get('previousDay', {}).get('data', []) or []
             all_pts = prev + current
+            latest  = current[-1] if current else (prev[-1] if prev else {})
 
-            print(f"ERCOT returned {len(current)} current + {len(prev)} previous intervals")
+            dis = round(abs(float(latest.get('totalDischarging', 0))))
+            chg = round(abs(float(latest.get('totalCharging',    0))))
+            net = round(float(latest.get('netOutput', dis - chg)))
+            ts  = latest.get('timestamp', now_cdt.isoformat())
+            print(f"ERCOT: D={dis}MW C={chg}MW Net={net}MW @ {ts}")
+            status = 'live'
 
-            # Get the most recent interval
-            latest = current[-1] if current else (prev[-1] if prev else {})
-            dis  = round(abs(float(latest.get('totalDischarging', 0))))
-            chg  = round(abs(float(latest.get('totalCharging',    0))))
-            net  = round(float(latest.get('netOutput', dis - chg)))
-            ts   = latest.get('timestamp', now_cdt.isoformat())
-
-            print(f"Latest interval: {ts} | D={dis}MW C={chg}MW Net={net}MW")
-
-            snap = {
-              'discharge_mw': dis, 'charge_mw': chg, 'net_mw': net,
-              'timestamp': ts, 'status': 'live',
-              'source': 'ERCOT ESR Dashboard (live)',
-              'fetched_utc': now_utc.isoformat(),
-            }
           except Exception as e:
-            print(f"ERROR fetching ERCOT: {e}", file=sys.stderr)
-            dis, chg, net = 0, 0, 0
-            all_pts = []
-            snap = {
-              'discharge_mw': 0, 'charge_mw': 0, 'net_mw': 0,
-              'status': 'error', 'error': str(e),
-              'fetched_utc': now_utc.isoformat(),
-              'source': f'ERCOT ESR (error: {e})'
-            }
+            print(f"ERCOT fetch error: {e}", file=sys.stderr)
+            dis, chg, net, ts, all_pts = 0, 0, 0, now_cdt.isoformat(), []
+            status = 'error'
 
-          # ── Load + update history ──────────────────────────────
-          HISTORY_FILE = 'history.json'
+          # ── Load compact history (hourly buckets, not raw 5-min) ──
+          # Format: { "YYYY-MM-DD HH": {dis, chg, net, n} }
+          # Max size: 10 days * 24 hours = 240 entries (~15KB vs 160KB)
+          HISTORY_FILE = 'history_hourly.json'
           try:
             with open(HISTORY_FILE) as f:
-              history = json.load(f)
-            print(f"Loaded {len(history)} existing history points")
+              hourly_hist = json.load(f)
           except Exception:
-            history = []
-            print("No existing history, starting fresh")
+            hourly_hist = {}
 
-          existing_ts = {p['ts'] for p in history}
-          added = 0
+          # Add new raw points into hourly buckets
           for pt in all_pts:
             try:
-              ts_  = pt.get('timestamp', '')
-              d    = abs(float(pt.get('totalDischarging', 0)))
-              c    = abs(float(pt.get('totalCharging',    0)))
-              n    = float(pt.get('netOutput', d - c))
-              if ts_ and ts_ not in existing_ts:
-                history.append({'ts': ts_, 'dis': round(d), 'chg': round(c), 'net': round(n)})
-                existing_ts.add(ts_)
-                added += 1
+              ts_str = pt.get('timestamp', '')
+              # Parse hour bucket key
+              if '-' in ts_str[10:]:
+                dt = datetime.datetime.fromisoformat(ts_str)
+                hr = dt.hour
+              else:
+                hr = int(ts_str[11:13])
+              d_ = abs(float(pt.get('totalDischarging', 0)))
+              c_ = abs(float(pt.get('totalCharging',    0)))
+              n_ = float(pt.get('netOutput', d_ - c_))
+              # Use date+hour as bucket key (CDT)
+              bucket = ts_str[:13]  # "YYYY-MM-DD HH"
+              if bucket not in hourly_hist:
+                hourly_hist[bucket] = {'dis':0,'chg':0,'net':0,'n':0}
+              b = hourly_hist[bucket]
+              b['dis'] = round((b['dis']*b['n'] + d_) / (b['n']+1))
+              b['chg'] = round((b['chg']*b['n'] + c_) / (b['n']+1))
+              b['net'] = round((b['net']*b['n'] + n_) / (b['n']+1))
+              b['n'] += 1
             except Exception:
               pass
 
-          print(f"Added {added} new history points")
+          # Trim to last 10 days
+          cutoff = (now_utc - datetime.timedelta(days=10)).strftime('%Y-%m-%d %H')
+          hourly_hist = {k:v for k,v in hourly_hist.items() if k >= cutoff}
+          print(f"Hourly history: {len(hourly_hist)} buckets ({len(hourly_hist)/24:.1f} days)")
 
-          # Keep last 10 days only
-          cutoff = now_utc - datetime.timedelta(days=10)
-          before = len(history)
-          history = [p for p in history if p['ts'] >= cutoff.isoformat()[:16]]
-          history.sort(key=lambda p: p['ts'])
-          print(f"History: {before} → {len(history)} pts after 10d trim")
-
-          # ── Build hourly SoC profile ───────────────────────────
-          # net = discharge - charge
-          # Positive net = net discharging = SoC falling
-          # Negative net = net charging   = SoC rising
-          # SoC delta for each interval ∝ -net
-
-          hour_net = defaultdict(list)
-          for pt in history:
+          # ── Build 24h SoC profile from hourly averages ─────────
+          hour_nets = defaultdict(list)
+          for bucket, v in hourly_hist.items():
             try:
-              ts_str = pt['ts']
-              # ERCOT timestamps are in CDT format e.g. "2026-04-08 14:30:00-0500"
-              if '+' in ts_str or ts_str.endswith('Z'):
-                dt = datetime.datetime.fromisoformat(ts_str.replace('Z','+00:00'))
-                hr = dt.astimezone(cdt).hour
-              elif '-' in ts_str[10:]:  # has timezone offset like -0500
-                dt = datetime.datetime.fromisoformat(ts_str)
-                hr = dt.hour  # already local
-              else:
-                # Assume CDT
-                hr = int(ts_str[11:13])
-              hour_net[hr].append(pt['net'])
-            except Exception as ex:
+              hr = int(bucket[11:13])
+              hour_nets[hr].append(v['net'])
+            except Exception:
               pass
 
-          hourly_avg_net = {}
-          for hr in range(24):
-            vals = hour_net.get(hr, [])
-            hourly_avg_net[hr] = round(sum(vals)/len(vals)) if vals else 0
+          hourly_avg_net = {hr: round(sum(v)/len(v)) for hr, v in hour_nets.items() if v}
 
-          # Spring Texas prior - fallback when history is sparse
           spring_prior = {
             0:48,1:46,2:44,3:42,4:40,5:40,
             6:45,7:52,8:60,9:68,10:76,11:83,
@@ -152,77 +122,66 @@ jobs:
             22:20,23:26
           }
 
-          if len(history) >= 100:
-            # Enough data — build from history
-            # Integrate: SoC change = -net (charging raises SoC)
-            soc_raw = []
-            cumulative = 0
+          n_days = len(hourly_hist) / 24
+          if n_days >= 1.0 and len(hourly_avg_net) >= 12:
+            # Integrate -net to get SoC curve
+            soc_raw, cum = [], 0
             for hr in range(24):
-              delta = -hourly_avg_net[hr]
-              cumulative += delta
-              soc_raw.append(cumulative)
-
-            raw_min = min(soc_raw)
-            raw_max = max(soc_raw)
-            raw_range = raw_max - raw_min if raw_max != raw_min else 1
-
-            SOC_FLOOR = 10
-            SOC_CEIL  = 92
-            hourly_soc = {}
-            for hr in range(24):
-              norm = (soc_raw[hr] - raw_min) / raw_range
-              hourly_soc[hr] = round(SOC_FLOOR + norm * (SOC_CEIL - SOC_FLOOR))
-            print("Using history-derived SoC curve")
+              cum += -(hourly_avg_net.get(hr, 0))
+              soc_raw.append(cum)
+            r_min, r_max = min(soc_raw), max(soc_raw)
+            r_range = r_max - r_min if r_max != r_min else 1
+            hourly_soc = {hr: round(10 + ((soc_raw[hr]-r_min)/r_range)*82) for hr in range(24)}
+            print("SoC: history-derived curve")
           else:
-            # Use spring prior until enough data
             hourly_soc = spring_prior
-            print(f"Using spring prior (only {len(history)} pts, need 100)")
+            print("SoC: spring prior (insufficient history)")
 
-          # Current SoC estimate
-          current_hour = now_cdt.hour
-          history_soc  = hourly_soc.get(current_hour, 50)
-
-          # Rate adjustment: deviation from hourly average
-          typical_net  = hourly_avg_net.get(current_hour, 0)
-          deviation    = net - typical_net
-          rate_adj     = -round(deviation / 1000 * 2.5)
-          rate_adj     = max(-15, min(15, rate_adj))
+          # Current SoC
+          cur_hr       = now_cdt.hour
+          history_soc  = hourly_soc.get(cur_hr, 50)
+          typical_net  = hourly_avg_net.get(cur_hr, 0)
+          rate_adj     = max(-15, min(15, -round((net - typical_net) / 1000 * 2.5)))
           estimated_soc = max(5, min(98, history_soc + rate_adj))
 
-          print(f"Hour {current_hour} CDT | History SoC: {history_soc}% | Rate adj: {rate_adj:+}% | Final: {estimated_soc}%")
+          print(f"Hour {cur_hr} CDT | SoC: {history_soc}% base + {rate_adj:+}% = {estimated_soc}%")
 
-          snap['estimated_soc']    = estimated_soc
-          snap['history_soc']      = history_soc
-          snap['hourly_soc']       = hourly_soc
-          snap['hourly_avg_net']   = hourly_avg_net
-          snap['history_pts']      = len(history)
-          snap['history_days']     = round(len(history) * 5 / 1440, 1)
-          snap['current_hour_cdt'] = current_hour
-          snap['rate_adjustment']  = rate_adj
+          # ── Write data.json ────────────────────────────────────
+          out = {
+            'discharge_mw':    dis,
+            'charge_mw':       chg,
+            'net_mw':          net,
+            'timestamp':       ts,
+            'status':          status,
+            'source':          'ERCOT ESR Dashboard (live)',
+            'fetched_utc':     now_utc.isoformat(),
+            'estimated_soc':   estimated_soc,
+            'history_soc':     history_soc,
+            'hourly_soc':      hourly_soc,
+            'hourly_avg_net':  {str(k):v for k,v in hourly_avg_net.items()},
+            'history_pts':     len(hourly_hist) * 12,   # approx 5-min equiv
+            'history_days':    round(n_days, 1),
+            'current_hour_cdt': cur_hr,
+            'rate_adjustment': rate_adj,
+          }
 
           with open('data.json', 'w') as f:
-            json.dump(snap, f, indent=2)
+            json.dump(out, f, indent=2)
           with open(HISTORY_FILE, 'w') as f:
-            json.dump(history, f)
+            json.dump(hourly_hist, f)
 
-          print("✓ Wrote data.json and history.json")
+          print(f"✓ Written data.json + {HISTORY_FILE} ({len(hourly_hist)} buckets)")
           PYEOF
 
       - name: Commit and push
         run: |
           git config user.name "ERCOT Data Bot"
           git config user.email "action@github.com"
-          git add data.json history.json
+          git add data.json history_hourly.json
           if git diff --staged --quiet; then
-            echo "No changes to commit"
+            echo "No changes"
           else
             git commit -m "ERCOT ESR $(date -u +'%H:%M UTC')"
             git push
-            echo "✓ Pushed update"
+            echo "✓ Pushed"
           fi
-
-      - name: Schedule health check
-        run: |
-          echo "Run completed at $(date -u)"
-          echo "Next scheduled run: ~5 minutes"
-# Trigger Wed Apr  8 20:10:53 UTC 2026
