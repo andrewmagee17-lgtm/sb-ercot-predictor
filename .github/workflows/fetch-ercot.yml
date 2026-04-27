@@ -2,27 +2,56 @@ name: Fetch ERCOT ESR Data
 
 on:
   schedule:
-    - cron: '0,5,10,15,20,25,30,35,40,45,50,55 * * * *'
+    - cron: '0,10,20,30,40,50 * * * *'
   workflow_dispatch:
   push:
     branches: [main]
+  workflow_run:
+    workflows: ["Fetch ERCOT ESR Data"]
+    types: [completed]
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   fetch:
     runs-on: ubuntu-latest
-    timeout-minutes: 4
+    timeout-minutes: 8
+    concurrency:
+      group: ercot-fetch
+      cancel-in-progress: false
+
     steps:
       - name: Checkout gh-pages
         uses: actions/checkout@v4
         with:
           ref: gh-pages
-          # Shallow clone — no history needed, keeps checkout fast
           fetch-depth: 1
 
-      - name: Fetch + update
+      - name: Throttle check
+        id: throttle
+        run: |
+          python3 - << 'PYEOF'
+          import json, datetime, os
+          try:
+            with open('data.json') as f:
+              d = json.load(f)
+            last = datetime.datetime.fromisoformat(d.get('fetched_utc','2000-01-01').replace('Z','+00:00'))
+            if last.tzinfo is None:
+              last = last.replace(tzinfo=datetime.timezone.utc)
+            age_min = (datetime.datetime.now(datetime.timezone.utc) - last).total_seconds() / 60
+            print(f"Last fetch: {age_min:.1f} min ago")
+            skip = 'true' if age_min < 4 else 'false'
+          except Exception as e:
+            print(f"Could not check throttle: {e}")
+            skip = 'false'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+            f.write(f"skip={skip}\n")
+          PYEOF
+
+      - name: Fetch ERCOT + update history
+        if: steps.throttle.outputs.skip != 'true'
         run: |
           python3 - << 'PYEOF'
           import urllib.request, json, datetime, sys
@@ -40,32 +69,25 @@ jobs:
           now_cdt = now_utc.astimezone(cdt)
           print(f"Run at {now_utc:%H:%M:%S UTC} / {now_cdt:%H:%M CDT}")
 
-          # ── Fetch ERCOT ────────────────────────────────────────
           try:
             req = urllib.request.Request(BASE, headers=HEADERS)
             with urllib.request.urlopen(req, timeout=12) as r:
               raw = json.loads(r.read())
-
             current = raw.get('currentDay',  {}).get('data', []) or []
             prev    = raw.get('previousDay', {}).get('data', []) or []
             all_pts = prev + current
             latest  = current[-1] if current else (prev[-1] if prev else {})
-
             dis = round(abs(float(latest.get('totalDischarging', 0))))
             chg = round(abs(float(latest.get('totalCharging',    0))))
             net = round(float(latest.get('netOutput', dis - chg)))
             ts  = latest.get('timestamp', now_cdt.isoformat())
             print(f"ERCOT: D={dis}MW C={chg}MW Net={net}MW @ {ts}")
             status = 'live'
-
           except Exception as e:
-            print(f"ERCOT fetch error: {e}", file=sys.stderr)
+            print(f"ERCOT error: {e}", file=sys.stderr)
             dis, chg, net, ts, all_pts = 0, 0, 0, now_cdt.isoformat(), []
             status = 'error'
 
-          # ── Load compact history (hourly buckets, not raw 5-min) ──
-          # Format: { "YYYY-MM-DD HH": {dis, chg, net, n} }
-          # Max size: 10 days * 24 hours = 240 entries (~15KB vs 160KB)
           HISTORY_FILE = 'history_hourly.json'
           try:
             with open(HISTORY_FILE) as f:
@@ -73,37 +95,29 @@ jobs:
           except Exception:
             hourly_hist = {}
 
-          # Add new raw points into hourly buckets
           for pt in all_pts:
             try:
               ts_str = pt.get('timestamp', '')
-              # Parse hour bucket key
-              if '-' in ts_str[10:]:
-                dt = datetime.datetime.fromisoformat(ts_str)
-                hr = dt.hour
-              else:
-                hr = int(ts_str[11:13])
-              d_ = abs(float(pt.get('totalDischarging', 0)))
-              c_ = abs(float(pt.get('totalCharging',    0)))
-              n_ = float(pt.get('netOutput', d_ - c_))
-              # Use date+hour as bucket key (CDT)
-              bucket = ts_str[:13]  # "YYYY-MM-DD HH"
+              hr     = int(ts_str[11:13])
+              d_     = abs(float(pt.get('totalDischarging', 0)))
+              c_     = abs(float(pt.get('totalCharging',    0)))
+              n_     = float(pt.get('netOutput', d_ - c_))
+              bucket = ts_str[:13]
               if bucket not in hourly_hist:
                 hourly_hist[bucket] = {'dis':0,'chg':0,'net':0,'n':0}
               b = hourly_hist[bucket]
               b['dis'] = round((b['dis']*b['n'] + d_) / (b['n']+1))
               b['chg'] = round((b['chg']*b['n'] + c_) / (b['n']+1))
               b['net'] = round((b['net']*b['n'] + n_) / (b['n']+1))
-              b['n'] += 1
+              b['n']  += 1
             except Exception:
               pass
 
-          # Trim to last 10 days
-          cutoff = (now_utc - datetime.timedelta(days=10)).strftime('%Y-%m-%d %H')
+          cutoff      = (now_utc - datetime.timedelta(days=10)).strftime('%Y-%m-%d %H')
           hourly_hist = {k:v for k,v in hourly_hist.items() if k >= cutoff}
-          print(f"Hourly history: {len(hourly_hist)} buckets ({len(hourly_hist)/24:.1f} days)")
+          n_days      = len(hourly_hist) / 24
+          print(f"History: {len(hourly_hist)} buckets ({n_days:.1f} days)")
 
-          # ── Build 24h SoC profile from hourly averages ─────────
           hour_nets = defaultdict(list)
           for bucket, v in hourly_hist.items():
             try:
@@ -111,7 +125,6 @@ jobs:
               hour_nets[hr].append(v['net'])
             except Exception:
               pass
-
           hourly_avg_net = {hr: round(sum(v)/len(v)) for hr, v in hour_nets.items() if v}
 
           spring_prior = {
@@ -122,58 +135,45 @@ jobs:
             22:20,23:26
           }
 
-          n_days = len(hourly_hist) / 24
           if n_days >= 1.0 and len(hourly_avg_net) >= 12:
-            # Integrate -net to get SoC curve
             soc_raw, cum = [], 0
             for hr in range(24):
               cum += -(hourly_avg_net.get(hr, 0))
               soc_raw.append(cum)
             r_min, r_max = min(soc_raw), max(soc_raw)
-            r_range = r_max - r_min if r_max != r_min else 1
-            hourly_soc = {hr: round(10 + ((soc_raw[hr]-r_min)/r_range)*82) for hr in range(24)}
-            print("SoC: history-derived curve")
+            r_rng = r_max - r_min if r_max != r_min else 1
+            hourly_soc = {hr: round(10 + ((soc_raw[hr]-r_min)/r_rng)*82) for hr in range(24)}
           else:
             hourly_soc = spring_prior
-            print("SoC: spring prior (insufficient history)")
 
-          # Current SoC
-          cur_hr       = now_cdt.hour
-          history_soc  = hourly_soc.get(cur_hr, 50)
-          typical_net  = hourly_avg_net.get(cur_hr, 0)
-          rate_adj     = max(-15, min(15, -round((net - typical_net) / 1000 * 2.5)))
+          cur_hr        = now_cdt.hour
+          history_soc   = hourly_soc.get(cur_hr, 50)
+          typical_net   = hourly_avg_net.get(cur_hr, 0)
+          rate_adj      = max(-15, min(15, -round((net - typical_net)/1000*2.5)))
           estimated_soc = max(5, min(98, history_soc + rate_adj))
+          print(f"SoC: {history_soc}% + {rate_adj:+}% = {estimated_soc}%")
 
-          print(f"Hour {cur_hr} CDT | SoC: {history_soc}% base + {rate_adj:+}% = {estimated_soc}%")
-
-          # ── Write data.json ────────────────────────────────────
           out = {
-            'discharge_mw':    dis,
-            'charge_mw':       chg,
-            'net_mw':          net,
-            'timestamp':       ts,
-            'status':          status,
-            'source':          'ERCOT ESR Dashboard (live)',
-            'fetched_utc':     now_utc.isoformat(),
-            'estimated_soc':   estimated_soc,
-            'history_soc':     history_soc,
-            'hourly_soc':      hourly_soc,
-            'hourly_avg_net':  {str(k):v for k,v in hourly_avg_net.items()},
-            'history_pts':     len(hourly_hist) * 12,   # approx 5-min equiv
-            'history_days':    round(n_days, 1),
+            'discharge_mw':     dis, 'charge_mw': chg, 'net_mw': net,
+            'timestamp':        ts,  'status':    status,
+            'source':           'ERCOT ESR Dashboard (live)',
+            'fetched_utc':      now_utc.isoformat(),
+            'estimated_soc':    estimated_soc,
+            'history_soc':      history_soc,
+            'hourly_soc':       hourly_soc,
+            'hourly_avg_net':   {str(k):v for k,v in hourly_avg_net.items()},
+            'history_pts':      len(hourly_hist) * 12,
+            'history_days':     round(n_days, 1),
             'current_hour_cdt': cur_hr,
-            'rate_adjustment': rate_adj,
+            'rate_adjustment':  rate_adj,
           }
-
-          with open('data.json', 'w') as f:
-            json.dump(out, f, indent=2)
-          with open(HISTORY_FILE, 'w') as f:
-            json.dump(hourly_hist, f)
-
-          print(f"✓ Written data.json + {HISTORY_FILE} ({len(hourly_hist)} buckets)")
+          with open('data.json',  'w') as f: json.dump(out,         f, indent=2)
+          with open(HISTORY_FILE, 'w') as f: json.dump(hourly_hist, f)
+          print("Done")
           PYEOF
 
       - name: Commit and push
+        if: steps.throttle.outputs.skip != 'true'
         run: |
           git config user.name "ERCOT Data Bot"
           git config user.email "action@github.com"
@@ -183,5 +183,20 @@ jobs:
           else
             git commit -m "ERCOT ESR $(date -u +'%H:%M UTC')"
             git push
-            echo "✓ Pushed"
           fi
+
+      - name: Self-trigger next run in 5 minutes
+        if: steps.throttle.outputs.skip != 'true'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            console.log('Waiting 5 minutes then re-triggering...');
+            await new Promise(r => setTimeout(r, 5 * 60 * 1000));
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              workflow_id: 'fetch-ercot.yml',
+              ref: 'main'
+            });
+            console.log('Next run queued.');
