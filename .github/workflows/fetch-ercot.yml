@@ -12,12 +12,15 @@ permissions:
   actions: write
 
 jobs:
+  # Job 1: Fast fetch — completes in ~30 seconds
   fetch:
     runs-on: ubuntu-latest
     timeout-minutes: 4
     concurrency:
       group: ercot-fetch
       cancel-in-progress: false
+    outputs:
+      did_fetch: ${{ steps.throttle.outputs.skip == 'false' && 'true' || 'false' }}
 
     steps:
       - name: Checkout gh-pages
@@ -38,11 +41,11 @@ jobs:
               d.get('fetched_utc','2000-01-01').replace('Z','+00:00'))
             if last.tzinfo is None:
               last = last.replace(tzinfo=datetime.timezone.utc)
-            age_min = (datetime.datetime.now(datetime.timezone.utc) - last).total_seconds() / 60
-            print(f"Last fetch: {age_min:.1f} min ago")
-            skip = 'true' if age_min < 4 else 'false'
+            age = (datetime.datetime.now(datetime.timezone.utc) - last).total_seconds() / 60
+            print(f"Last fetch: {age:.1f} min ago")
+            skip = 'true' if age < 4 else 'false'
           except Exception as e:
-            print(f"Throttle check failed ({e}) — proceeding")
+            print(f"Check failed ({e}) — proceeding")
             skip = 'false'
           with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
             f.write(f"skip={skip}\n")
@@ -64,7 +67,6 @@ jobs:
           now_utc = datetime.datetime.now(datetime.timezone.utc)
           cdt     = datetime.timezone(datetime.timedelta(hours=-5))
           now_cdt = now_utc.astimezone(cdt)
-          print(f"Run at {now_utc:%H:%M:%S UTC} / {now_cdt:%H:%M CDT}")
 
           try:
             req = urllib.request.Request(BASE, headers=HEADERS)
@@ -78,10 +80,10 @@ jobs:
             chg = round(abs(float(latest.get('totalCharging',    0))))
             net = round(float(latest.get('netOutput', dis - chg)))
             ts  = latest.get('timestamp', now_cdt.isoformat())
-            print(f"ERCOT: D={dis}MW C={chg}MW Net={net}MW")
+            print(f"D={dis}MW C={chg}MW Net={net}MW")
             status = 'live'
           except Exception as e:
-            print(f"ERCOT error: {e}", file=sys.stderr)
+            print(f"Error: {e}", file=sys.stderr)
             dis, chg, net, ts, all_pts = 0, 0, 0, now_cdt.isoformat(), []
             status = 'error'
 
@@ -95,11 +97,11 @@ jobs:
           for pt in all_pts:
             try:
               ts_str = pt.get('timestamp', '')
+              bucket = ts_str[:13]
+              if not bucket: continue
               d_ = abs(float(pt.get('totalDischarging', 0)))
               c_ = abs(float(pt.get('totalCharging',    0)))
               n_ = float(pt.get('netOutput', d_ - c_))
-              bucket = ts_str[:13]
-              if not bucket: continue
               if bucket not in hourly_hist:
                 hourly_hist[bucket] = {'dis':0,'chg':0,'net':0,'n':0}
               b = hourly_hist[bucket]
@@ -113,7 +115,6 @@ jobs:
           cutoff      = (now_utc - datetime.timedelta(days=10)).strftime('%Y-%m-%d %H')
           hourly_hist = {k:v for k,v in hourly_hist.items() if k >= cutoff}
           n_days      = len(hourly_hist) / 24
-          print(f"History: {len(hourly_hist)} buckets ({n_days:.1f} days)")
 
           hour_nets = defaultdict(list)
           for bucket, v in hourly_hist.items():
@@ -124,13 +125,9 @@ jobs:
               pass
           hourly_avg_net = {hr: round(sum(v)/len(v)) for hr, v in hour_nets.items() if v}
 
-          spring_prior = {
-            0:48,1:46,2:44,3:42,4:40,5:40,
-            6:45,7:52,8:60,9:68,10:76,11:83,
-            12:88,13:91,14:92,15:90,16:82,
-            17:65,18:45,19:30,20:22,21:18,
-            22:20,23:26
-          }
+          spring_prior = {0:48,1:46,2:44,3:42,4:40,5:40,6:45,7:52,8:60,9:68,
+            10:76,11:83,12:88,13:91,14:92,15:90,16:82,17:65,18:45,19:30,
+            20:22,21:18,22:20,23:26}
 
           if n_days >= 1.0 and len(hourly_avg_net) >= 12:
             soc_raw, cum = [], 0
@@ -148,7 +145,6 @@ jobs:
           typical_net   = hourly_avg_net.get(cur_hr, 0)
           rate_adj      = max(-15, min(15, -round((net - typical_net)/1000*2.5)))
           estimated_soc = max(5, min(98, history_soc + rate_adj))
-          print(f"SoC: {history_soc}% + {rate_adj:+}% = {estimated_soc}%")
 
           out = {
             'discharge_mw': dis, 'charge_mw': chg, 'net_mw': net,
@@ -166,7 +162,7 @@ jobs:
           }
           with open('data.json',  'w') as f: json.dump(out,         f, indent=2)
           with open(HISTORY_FILE, 'w') as f: json.dump(hourly_hist, f)
-          print("Done")
+          print(f"SoC: {estimated_soc}% | History: {len(hourly_hist)} buckets")
           PYEOF
 
       - name: Commit and push
@@ -175,21 +171,25 @@ jobs:
           git config user.name "ERCOT Data Bot"
           git config user.email "action@github.com"
           git add data.json history_hourly.json
-          if git diff --staged --quiet; then
-            echo "No changes"
-          else
-            git commit -m "ERCOT ESR $(date -u +'%H:%M UTC')"
-            git push
-          fi
+          git diff --staged --quiet || git commit -m "ERCOT ESR $(date -u +'%H:%M UTC')" && git push || true
 
-      - name: Queue next run via dispatch
-        if: steps.throttle.outputs.skip != 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  # Job 2: Runs after fetch, waits 5 min, then dispatches next fetch
+  # Separate job so GitHub doesn't cancel it when fetch completes
+  redispatch:
+    needs: fetch
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    # Only chain if this was a real fetch (not throttled, not a push trigger)
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    steps:
+      - name: Wait 5 minutes then trigger next run
         run: |
-          # Sleep 5 minutes then dispatch the next run
-          # This runs as a background shell process so it doesn't block
-          # Use gh CLI which is pre-installed on all GitHub runners
+          echo "Fetch complete. Waiting 5 min to dispatch next run..."
           sleep 300
-          gh workflow run fetch-ercot.yml --repo ${{ github.repository }} --ref main
-          echo "Next run dispatched at $(date -u +'%H:%M UTC')"
+          curl -s -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/fetch-ercot.yml/dispatches" \
+            -d '{"ref":"main"}' \
+            && echo "✓ Next run dispatched at $(date -u +'%H:%M UTC')" \
+            || echo "Dispatch failed — cron will recover"
