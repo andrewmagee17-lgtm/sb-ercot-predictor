@@ -6,9 +6,6 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-  workflow_run:
-    workflows: ["Fetch ERCOT ESR Data"]
-    types: [completed]
 
 permissions:
   contents: write
@@ -17,7 +14,7 @@ permissions:
 jobs:
   fetch:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 4
     concurrency:
       group: ercot-fetch
       cancel-in-progress: false
@@ -37,14 +34,15 @@ jobs:
           try:
             with open('data.json') as f:
               d = json.load(f)
-            last = datetime.datetime.fromisoformat(d.get('fetched_utc','2000-01-01').replace('Z','+00:00'))
+            last = datetime.datetime.fromisoformat(
+              d.get('fetched_utc','2000-01-01').replace('Z','+00:00'))
             if last.tzinfo is None:
               last = last.replace(tzinfo=datetime.timezone.utc)
             age_min = (datetime.datetime.now(datetime.timezone.utc) - last).total_seconds() / 60
             print(f"Last fetch: {age_min:.1f} min ago")
             skip = 'true' if age_min < 4 else 'false'
           except Exception as e:
-            print(f"Could not check throttle: {e}")
+            print(f"Throttle check failed ({e}) — proceeding")
             skip = 'false'
           with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
             f.write(f"skip={skip}\n")
@@ -63,7 +61,6 @@ jobs:
             'User-Agent': 'Mozilla/5.0 (compatible; ERCOT-Fetcher/2.0)',
             'Referer': 'https://www.ercot.com/gridmktinfo/dashboards/energystorageresources'
           }
-
           now_utc = datetime.datetime.now(datetime.timezone.utc)
           cdt     = datetime.timezone(datetime.timedelta(hours=-5))
           now_cdt = now_utc.astimezone(cdt)
@@ -81,7 +78,7 @@ jobs:
             chg = round(abs(float(latest.get('totalCharging',    0))))
             net = round(float(latest.get('netOutput', dis - chg)))
             ts  = latest.get('timestamp', now_cdt.isoformat())
-            print(f"ERCOT: D={dis}MW C={chg}MW Net={net}MW @ {ts}")
+            print(f"ERCOT: D={dis}MW C={chg}MW Net={net}MW")
             status = 'live'
           except Exception as e:
             print(f"ERCOT error: {e}", file=sys.stderr)
@@ -98,11 +95,11 @@ jobs:
           for pt in all_pts:
             try:
               ts_str = pt.get('timestamp', '')
-              hr     = int(ts_str[11:13])
-              d_     = abs(float(pt.get('totalDischarging', 0)))
-              c_     = abs(float(pt.get('totalCharging',    0)))
-              n_     = float(pt.get('netOutput', d_ - c_))
+              d_ = abs(float(pt.get('totalDischarging', 0)))
+              c_ = abs(float(pt.get('totalCharging',    0)))
+              n_ = float(pt.get('netOutput', d_ - c_))
               bucket = ts_str[:13]
+              if not bucket: continue
               if bucket not in hourly_hist:
                 hourly_hist[bucket] = {'dis':0,'chg':0,'net':0,'n':0}
               b = hourly_hist[bucket]
@@ -154,18 +151,18 @@ jobs:
           print(f"SoC: {history_soc}% + {rate_adj:+}% = {estimated_soc}%")
 
           out = {
-            'discharge_mw':     dis, 'charge_mw': chg, 'net_mw': net,
-            'timestamp':        ts,  'status':    status,
-            'source':           'ERCOT ESR Dashboard (live)',
-            'fetched_utc':      now_utc.isoformat(),
-            'estimated_soc':    estimated_soc,
-            'history_soc':      history_soc,
-            'hourly_soc':       hourly_soc,
-            'hourly_avg_net':   {str(k):v for k,v in hourly_avg_net.items()},
-            'history_pts':      len(hourly_hist) * 12,
-            'history_days':     round(n_days, 1),
+            'discharge_mw': dis, 'charge_mw': chg, 'net_mw': net,
+            'timestamp': ts, 'status': status,
+            'source': 'ERCOT ESR Dashboard (live)',
+            'fetched_utc': now_utc.isoformat(),
+            'estimated_soc': estimated_soc,
+            'history_soc': history_soc,
+            'hourly_soc': hourly_soc,
+            'hourly_avg_net': {str(k):v for k,v in hourly_avg_net.items()},
+            'history_pts': len(hourly_hist) * 12,
+            'history_days': round(n_days, 1),
             'current_hour_cdt': cur_hr,
-            'rate_adjustment':  rate_adj,
+            'rate_adjustment': rate_adj,
           }
           with open('data.json',  'w') as f: json.dump(out,         f, indent=2)
           with open(HISTORY_FILE, 'w') as f: json.dump(hourly_hist, f)
@@ -185,18 +182,14 @@ jobs:
             git push
           fi
 
-      - name: Self-trigger next run in 5 minutes
+      - name: Queue next run via dispatch
         if: steps.throttle.outputs.skip != 'true'
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            console.log('Waiting 5 minutes then re-triggering...');
-            await new Promise(r => setTimeout(r, 5 * 60 * 1000));
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo:  context.repo.repo,
-              workflow_id: 'fetch-ercot.yml',
-              ref: 'main'
-            });
-            console.log('Next run queued.');
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Sleep 5 minutes then dispatch the next run
+          # This runs as a background shell process so it doesn't block
+          # Use gh CLI which is pre-installed on all GitHub runners
+          sleep 300
+          gh workflow run fetch-ercot.yml --repo ${{ github.repository }} --ref main
+          echo "Next run dispatched at $(date -u +'%H:%M UTC')"
