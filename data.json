@@ -1,12 +1,12 @@
 {
-  "discharge_mw": 325,
-  "charge_mw": 3771,
-  "net_mw": -3446,
-  "timestamp": "2026-08-10 11:30:00-0500",
+  "discharge_mw": 290,
+  "charge_mw": 3691,
+  "net_mw": -3401,
+  "timestamp": "2026-08-10 11:35:00-0500",
   "status": "live",
   "source": "ERCOT ESR Dashboard (live)",
-  "fetched_utc": "2026-08-10T16:35:33.576820+00:00",
-  "estimated_soc": 81,
+  "fetched_utc": "2026-08-10T16:40:54.656894+00:00",
+  "estimated_soc": 80,
   "history_soc": 82,
   "hourly_soc": {
     "0": 10,
@@ -49,12 +49,12 @@
     "3": -690,
     "4": -486,
     "5": -145,
-    "6": 433,
+    "6": 432,
     "7": -620,
     "8": -4630,
     "9": -7782,
-    "10": -6922,
-    "11": -4041,
+    "10": -6920,
+    "11": -4034,
     "12": -1576,
     "13": -584,
     "14": -207,
@@ -63,5 +63,5 @@
   "history_pts": 2832,
   "history_days": 9.8,
   "current_hour_cdt": 11,
-  "rate_adjustment": -1
+  "rate_adjustment": -2
 }
